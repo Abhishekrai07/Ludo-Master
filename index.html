@@ -192,7 +192,7 @@
     <div id="audio-container" style="display: none;"></div>
 
     <script>
-        const GAME_VERSION = "3.6"; // The Flawless Server Queue Edition
+        const GAME_VERSION = "3.7"; // The Flawless Action Queue Architecture
         
         const firebaseConfig = {
             apiKey: "AIzaSyAKv2mbAUEMWRyx50zloBVy418UnLiiqBU",
@@ -220,10 +220,12 @@
         let gameMode = 'local'; let selectedPlayerCount = 4; let activePlayers = []; let finishedPlayers = []; 
         let currentTurnIndex = 0; let currentTurn = 0; let diceValue = 0; let isRolled = false; 
         
-        // BUG FIX: State Queue System
+        // BUG FIX: State Queue & Action Queue System
         let isAnimating = false; 
         let isRolling = false; 
-        let pendingState = null; // Queue for delayed state updates
+        let isActionPending = false;
+        let actionQueue = [];
+        let pendingState = null; 
         
         let consecutiveSixes = 0; let tokens = [];
 
@@ -308,7 +310,7 @@
             if(!document.getElementById(peerId)) {
                 let audioObj = document.createElement('audio'); audioObj.id = peerId; audioObj.autoplay = true; audioObj.srcObject = stream;
                 document.getElementById('audio-container').appendChild(audioObj);
-                audioObj.play().catch(e => console.log("Autoplay block caught"));
+                audioObj.play().catch(e => console.log("Audio Autoplay Blocked. Interact with page."));
             }
         }
 
@@ -320,16 +322,37 @@
             }
         }
 
-        // --- LOCK MANAGER ---
+        // --- NEW ARCHITECTURE: QUEUE MANAGER ---
         function checkPendingState() {
-            if (pendingState && !isAnimating && !isRolling) {
+            if (pendingState && !isAnimating && !isRolling && actionQueue.length === 0) {
                 let data = pendingState;
                 pendingState = null; 
                 loadFromData(data);
             }
         }
-        function setAnimating(val) { isAnimating = val; if(!val) checkPendingState(); }
-        function setRolling(val) { isRolling = val; if(!val) checkPendingState(); }
+
+        function processNextAction() {
+            if (isRolling || isAnimating) return; 
+            if (actionQueue.length === 0) {
+                checkPendingState();
+                return;
+            }
+            
+            let action = actionQueue.shift();
+            isActionPending = false; 
+            
+            if (action.type === 'ROLL') {
+                setRolling(true);
+                executeRoll(action.by, action.result);
+            } else if (action.type === 'MOVE') {
+                setAnimating(true);
+                let t = tokens.find(tok => tok.color === action.color && tok.id === action.tokenId); 
+                if(t) executeMove(t); else setAnimating(false); // failsafe
+            }
+        }
+
+        function setAnimating(val) { isAnimating = val; if(!val) setTimeout(processNextAction, 50); }
+        function setRolling(val) { isRolling = val; if(!val) setTimeout(processNextAction, 50); }
 
         function createOnlineRoom() {
             roomCode = Math.floor(1000 + Math.random() * 9000).toString(); myOnlineId = 0; 
@@ -360,12 +383,11 @@
         }
 
         function listenToRoom() {
-            // STATE SYNC WITH QUEUE SYSTEM
             db.ref('rooms/' + roomCode + '/state').on('value', snapshot => { 
                 let data = snapshot.val(); 
                 if(data) {
-                    if(!isAnimating && !isRolling) loadFromData(data); 
-                    else pendingState = data; // If busy, queue the state update!
+                    if(!isAnimating && !isRolling && actionQueue.length === 0) loadFromData(data); 
+                    else pendingState = data; 
                 }
             });
 
@@ -373,15 +395,8 @@
                 let action = snapshot.val();
                 if(action && action.id !== lastActionId) {
                     lastActionId = action.id;
-                    if(action.type === 'ROLL') { 
-                        setRolling(true); // Lock
-                        executeRoll(action.by, action.result); 
-                    } 
-                    else if(action.type === 'MOVE') { 
-                        setAnimating(true); // Lock
-                        let t = tokens.find(tok => tok.color === action.color && tok.id === action.tokenId); 
-                        if(t) executeMove(t); 
-                    }
+                    actionQueue.push(action);
+                    processNextAction();
                 }
             });
         }
@@ -405,8 +420,7 @@
             document.getElementById('brand-text').innerText = `ROOM: ${roomCode} | You are ${colorName}`;
             updateTurnUI(); updateTokensPosition();
             
-            // Re-highlight if it's my turn after state load
-            if(gameMode === 'online' && isRolled && myOnlineId === currentTurn && !isAnimating && !isRolling) {
+            if(gameMode === 'online' && isRolled && myOnlineId === currentTurn && !isAnimating && !isRolling && actionQueue.length === 0) {
                 let myTokens = tokens.filter(t => t.playerIndex === currentTurn);
                 let validTokens = myTokens.filter(t => { if (t.state === 'base' && diceValue === 6) return true; if (t.state === 'path' && (t.pos + diceValue <= 56)) return true; return false; });
                 validTokens.forEach(t => t.el.classList.add('highlight'));
@@ -494,12 +508,17 @@
         const diceFaces = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
         
         function diceClicked(playerIndex) {
-            if (isRolled || isAnimating || isRolling || playerIndex !== currentTurn || finishedPlayers.includes(currentTurn)) return;
+            if (isRolled || isAnimating || isRolling || isActionPending || playerIndex !== currentTurn || finishedPlayers.includes(currentTurn)) return;
             if (gameMode === 'online' && myOnlineId !== currentTurn) { alert("It's not your turn!"); return; }
             
-            setRolling(true); 
+            isActionPending = true; 
             let result = Math.floor(Math.random() * 6) + 1;
-            if (gameMode === 'online') { db.ref(`rooms/${roomCode}/action`).set({ type: 'ROLL', by: playerIndex, result: result, id: Date.now() }); } else { executeRoll(playerIndex, result); }
+            if (gameMode === 'online') { 
+                db.ref(`rooms/${roomCode}/action`).set({ type: 'ROLL', by: playerIndex, result: result, id: Date.now() }); 
+            } else { 
+                actionQueue.push({ type: 'ROLL', by: playerIndex, result: result });
+                processNextAction();
+            }
         }
 
         function executeRoll(playerIndex, result) {
@@ -516,13 +535,13 @@
                         if (consecutiveSixes === 3) { 
                             triggerHaptic([200, 100, 200]); consecutiveSixes = 0; isRolled = false; 
                             if (gameMode === 'online') { if (myOnlineId === 0) setTimeout(nextTurn, 500); } else { setTimeout(nextTurn, 500); }
-                            setRolling(false); // UNLOCK
+                            setRolling(false);
                             return; 
                         } 
                     } else { consecutiveSixes = 0; }
                     
                     checkPossibleMoves(); 
-                    setRolling(false); // UNLOCK
+                    setRolling(false);
                 }
             }, 50);
         }
@@ -559,16 +578,23 @@
         function tokenClicked(t) { 
             if (gameMode === 'bot' && playersInfo[currentTurn].isBot) return; 
             if (gameMode === 'online') { if (myOnlineId !== currentTurn) return; if (t.playerIndex !== myOnlineId) return; }
-            if (!isRolled || isAnimating || isRolling || t.playerIndex !== currentTurn) return;
+            if (!isRolled || isAnimating || isRolling || isActionPending || t.playerIndex !== currentTurn) return;
             if (t.state === 'base' && diceValue !== 6) return; if (t.state === 'path' && (t.pos + diceValue > 56)) return; 
             
-            setAnimating(true); 
-            if (gameMode === 'online') { db.ref(`rooms/${roomCode}/action`).set({ type: 'MOVE', color: t.color, tokenId: t.id, id: Date.now() }); } else { executeMove(t); }
+            isActionPending = true; 
+            if (gameMode === 'online') { 
+                db.ref(`rooms/${roomCode}/action`).set({ type: 'MOVE', color: t.color, tokenId: t.id, id: Date.now() }); 
+            } else { 
+                actionQueue.push({ type: 'MOVE', color: t.color, tokenId: t.id });
+                processNextAction();
+            }
         }
 
         function executeMove(t) {
-            setAnimating(true); tokens.forEach(tok => tok.el.classList.remove('highlight')); 
-            if (t.state === 'base' && diceValue === 6) { t.state = 'path'; t.pos = 0; playSfx(spawnSound); triggerHaptic([50, 50, 100]); updateTokensPosition(); setTimeout(finalizeMove, 50); } else if (t.state === 'path') {
+            tokens.forEach(tok => tok.el.classList.remove('highlight')); 
+            if (t.state === 'base' && diceValue === 6) { 
+                t.state = 'path'; t.pos = 0; playSfx(spawnSound); triggerHaptic([50, 50, 100]); updateTokensPosition(); setTimeout(finalizeMove, 50); 
+            } else if (t.state === 'path') {
                 let stepsLeft = diceValue;
                 function takeStep() {
                     t.pos++; stepsLeft--; playSfx(moveSound); triggerHaptic(20); updateTokensPosition();
@@ -589,6 +615,8 @@
                     }
                 }
                 takeStep(); 
+            } else {
+                setAnimating(false); // FAILSAFE
             }
         }
 
@@ -618,7 +646,7 @@
             } else { 
                 if (gameMode === 'online') { if (myOnlineId === 0) nextTurn(); } else { nextTurn(); } 
             } 
-            setAnimating(false); // UNLOCK
+            setAnimating(false); 
         }
         
         function nextTurn() { 
