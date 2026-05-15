@@ -192,7 +192,7 @@
     <div id="audio-container" style="display: none;"></div>
 
     <script>
-        const GAME_VERSION = "3.5"; // Anti-Glitch Server Sync Edition
+        const GAME_VERSION = "3.6"; // The Flawless Server Queue Edition
         
         const firebaseConfig = {
             apiKey: "AIzaSyAKv2mbAUEMWRyx50zloBVy418UnLiiqBU",
@@ -220,9 +220,10 @@
         let gameMode = 'local'; let selectedPlayerCount = 4; let activePlayers = []; let finishedPlayers = []; 
         let currentTurnIndex = 0; let currentTurn = 0; let diceValue = 0; let isRolled = false; 
         
-        // BUG FIX 1: Lock Variables
+        // BUG FIX: State Queue System
         let isAnimating = false; 
         let isRolling = false; 
+        let pendingState = null; // Queue for delayed state updates
         
         let consecutiveSixes = 0; let tokens = [];
 
@@ -289,10 +290,7 @@
                     myAudioStream = stream;
                     let micBtn = document.getElementById('mic-btn'); micBtn.style.display = 'flex'; 
                     let myPeerId = `ludo-room-${roomCode}-${myOnlineId}`; 
-                    
-                    // BUG FIX 3: Ping Interval to keep connection alive
                     peer = new Peer(myPeerId, { pingInterval: 5000 });
-                    
                     peer.on('call', call => { call.answer(myAudioStream); call.on('stream', remoteStream => { playRemoteAudio(remoteStream, call.peer); }); });
                     peer.on('open', id => {
                         for(let i = 0; i < myOnlineId; i++) {
@@ -310,9 +308,7 @@
             if(!document.getElementById(peerId)) {
                 let audioObj = document.createElement('audio'); audioObj.id = peerId; audioObj.autoplay = true; audioObj.srcObject = stream;
                 document.getElementById('audio-container').appendChild(audioObj);
-                
-                // BUG FIX 3: Force play and catch error
-                audioObj.play().catch(e => console.log("Audio Autoplay Blocked. Interact with page."));
+                audioObj.play().catch(e => console.log("Autoplay block caught"));
             }
         }
 
@@ -323,6 +319,17 @@
                 if(isMicEnabled) { micBtn.innerText = '🎤'; micBtn.classList.remove('mic-off'); } else { micBtn.innerText = '🔇'; micBtn.classList.add('mic-off'); }
             }
         }
+
+        // --- LOCK MANAGER ---
+        function checkPendingState() {
+            if (pendingState && !isAnimating && !isRolling) {
+                let data = pendingState;
+                pendingState = null; 
+                loadFromData(data);
+            }
+        }
+        function setAnimating(val) { isAnimating = val; if(!val) checkPendingState(); }
+        function setRolling(val) { isRolling = val; if(!val) checkPendingState(); }
 
         function createOnlineRoom() {
             roomCode = Math.floor(1000 + Math.random() * 9000).toString(); myOnlineId = 0; 
@@ -353,10 +360,13 @@
         }
 
         function listenToRoom() {
+            // STATE SYNC WITH QUEUE SYSTEM
             db.ref('rooms/' + roomCode + '/state').on('value', snapshot => { 
                 let data = snapshot.val(); 
-                // BUG FIX 1: Don't load data if currently animating or rolling to prevent UI glitch
-                if(data && !isAnimating && !isRolling) loadFromData(data); 
+                if(data) {
+                    if(!isAnimating && !isRolling) loadFromData(data); 
+                    else pendingState = data; // If busy, queue the state update!
+                }
             });
 
             db.ref('rooms/' + roomCode + '/action').on('value', snapshot => {
@@ -364,11 +374,11 @@
                 if(action && action.id !== lastActionId) {
                     lastActionId = action.id;
                     if(action.type === 'ROLL') { 
-                        isRolling = true; // Lock for receiver
+                        setRolling(true); // Lock
                         executeRoll(action.by, action.result); 
                     } 
                     else if(action.type === 'MOVE') { 
-                        isAnimating = true; // Lock for receiver
+                        setAnimating(true); // Lock
                         let t = tokens.find(tok => tok.color === action.color && tok.id === action.tokenId); 
                         if(t) executeMove(t); 
                     }
@@ -395,7 +405,7 @@
             document.getElementById('brand-text').innerText = `ROOM: ${roomCode} | You are ${colorName}`;
             updateTurnUI(); updateTokensPosition();
             
-            // Re-highlight valid tokens if it's my turn after data load
+            // Re-highlight if it's my turn after state load
             if(gameMode === 'online' && isRolled && myOnlineId === currentTurn && !isAnimating && !isRolling) {
                 let myTokens = tokens.filter(t => t.playerIndex === currentTurn);
                 let validTokens = myTokens.filter(t => { if (t.state === 'base' && diceValue === 6) return true; if (t.state === 'path' && (t.pos + diceValue <= 56)) return true; return false; });
@@ -487,9 +497,7 @@
             if (isRolled || isAnimating || isRolling || playerIndex !== currentTurn || finishedPlayers.includes(currentTurn)) return;
             if (gameMode === 'online' && myOnlineId !== currentTurn) { alert("It's not your turn!"); return; }
             
-            // BUG FIX 1: Lock Immediately to prevent double click spam
-            isRolling = true; 
-            
+            setRolling(true); 
             let result = Math.floor(Math.random() * 6) + 1;
             if (gameMode === 'online') { db.ref(`rooms/${roomCode}/action`).set({ type: 'ROLL', by: playerIndex, result: result, id: Date.now() }); } else { executeRoll(playerIndex, result); }
         }
@@ -500,25 +508,21 @@
             let interval = setInterval(() => {
                 activeDiceEl.innerText = diceFaces[Math.floor(Math.random() * 6)]; count++;
                 if (count > 10) {
-                    clearInterval(interval); diceValue = result; activeDiceEl.innerText = diceFaces[diceValue - 1]; isRolled = true; isRolling = false;
+                    clearInterval(interval); diceValue = result; activeDiceEl.innerText = diceFaces[diceValue - 1]; isRolled = true; 
                     
                     if(diceValue === 6) triggerHaptic([50, 50, 50]); 
                     if (diceValue === 6) { 
                         consecutiveSixes++; 
                         if (consecutiveSixes === 3) { 
                             triggerHaptic([200, 100, 200]); consecutiveSixes = 0; isRolled = false; 
-                            
-                            // BUG FIX 2: Only Host processes next turn execution
-                            if (gameMode === 'online') {
-                                if (myOnlineId === 0) setTimeout(nextTurn, 500); 
-                            } else {
-                                setTimeout(nextTurn, 500); 
-                            }
+                            if (gameMode === 'online') { if (myOnlineId === 0) setTimeout(nextTurn, 500); } else { setTimeout(nextTurn, 500); }
+                            setRolling(false); // UNLOCK
                             return; 
                         } 
                     } else { consecutiveSixes = 0; }
                     
                     checkPossibleMoves(); 
+                    setRolling(false); // UNLOCK
                 }
             }, 50);
         }
@@ -529,12 +533,7 @@
             tokens.forEach(t => t.el.classList.remove('highlight'));
 
             if (validTokens.length === 0) { 
-                // BUG FIX 2: Master Sync Logic
-                if (gameMode === 'online') {
-                    if (myOnlineId === 0) setTimeout(nextTurn, 500); 
-                } else {
-                    setTimeout(nextTurn, 500); 
-                }
+                if (gameMode === 'online') { if (myOnlineId === 0) setTimeout(nextTurn, 500); } else { setTimeout(nextTurn, 500); }
             } else {
                 if(gameMode === 'bot' && playersInfo[currentTurn].isBot) {
                     let bestToken = validTokens[0]; let maxScore = -1;
@@ -563,14 +562,12 @@
             if (!isRolled || isAnimating || isRolling || t.playerIndex !== currentTurn) return;
             if (t.state === 'base' && diceValue !== 6) return; if (t.state === 'path' && (t.pos + diceValue > 56)) return; 
             
-            // BUG FIX 1: Lock Immediately
-            isAnimating = true; 
-            
+            setAnimating(true); 
             if (gameMode === 'online') { db.ref(`rooms/${roomCode}/action`).set({ type: 'MOVE', color: t.color, tokenId: t.id, id: Date.now() }); } else { executeMove(t); }
         }
 
         function executeMove(t) {
-            isAnimating = true; tokens.forEach(tok => tok.el.classList.remove('highlight')); 
+            setAnimating(true); tokens.forEach(tok => tok.el.classList.remove('highlight')); 
             if (t.state === 'base' && diceValue === 6) { t.state = 'path'; t.pos = 0; playSfx(spawnSound); triggerHaptic([50, 50, 100]); updateTokensPosition(); setTimeout(finalizeMove, 50); } else if (t.state === 'path') {
                 let stepsLeft = diceValue;
                 function takeStep() {
@@ -612,19 +609,20 @@
         }
 
         function finalizeMove() { 
-            updateTokensPosition(); isAnimating = false; if (checkWinCondition()) return; 
+            updateTokensPosition();  
+            if (checkWinCondition()) { setAnimating(false); return; }
             if (diceValue === 6) { 
                 isRolled = false; 
-                // BUG FIX 2: Only Host Saves Core State
                 if (gameMode === 'online') { if (myOnlineId === 0) saveGameState(); } else { saveGameState(); }
                 if(gameMode === 'bot' && playersInfo[currentTurn].isBot) { setTimeout(() => diceClicked(currentTurn), 1200); } 
             } else { 
                 if (gameMode === 'online') { if (myOnlineId === 0) nextTurn(); } else { nextTurn(); } 
             } 
+            setAnimating(false); // UNLOCK
         }
         
         function nextTurn() { 
-            if (gameMode === 'online' && myOnlineId !== 0) return; // EXTRA SECURITY
+            if (gameMode === 'online' && myOnlineId !== 0) return; 
             document.getElementById(`dice-${currentTurn}`).innerText = "🎲"; 
             do { currentTurnIndex = (currentTurnIndex + 1) % activePlayers.length; currentTurn = activePlayers[currentTurnIndex]; } while (finishedPlayers.includes(currentTurn) && finishedPlayers.length < activePlayers.length); 
             isRolled = false; updateTurnUI(); saveGameState(); 
