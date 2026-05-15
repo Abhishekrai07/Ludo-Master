@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Ludo Master - Online Edition</title>
+    
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+    <script>
+        document.addEventListener('contextmenu', event => event.preventDefault());
+        document.onkeydown = function(e) {
+            if(e.keyCode == 123) { return false; }
+            if(e.ctrlKey && e.shiftKey && e.keyCode == 'I'.charCodeAt(0)) { return false; }
+            if(e.ctrlKey && e.shiftKey && e.keyCode == 'C'.charCodeAt(0)) { return false; }
+            if(e.ctrlKey && e.shiftKey && e.keyCode == 'J'.charCodeAt(0)) { return false; }
+            if(e.ctrlKey && e.keyCode == 'U'.charCodeAt(0)) { return false; }
+        }
+    </script>
+
+    <style>
+        /* TEXT COPY LOCK & BASE RESET */
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; touch-action: manipulation; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none; }
+        input { -webkit-user-select: auto; -moz-user-select: auto; -ms-user-select: auto; user-select: auto; } 
+        
+        html, body {
+            width: 100%; height: 100%; background-color: #0d47a1;
+            background-image: radial-gradient(#1565c0 15%, transparent 16%), radial-gradient(#1565c0 15%, transparent 16%);
+            background-size: 30px 30px; background-position: 0 0, 15px 15px;
+            overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white;
+        }
+
+        /* --- SETUP SCREEN UI --- */
+        #setup-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(5px); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1000; }
+        .setup-box { background: #1e293b; padding: 25px; border-radius: 20px; text-align: center; border: 2px solid #00A8F3; box-shadow: 0 0 30px rgba(0, 168, 243, 0.5); width: 90%; max-width: 400px; }
+        .setup-box h1 { color: #FFF200; margin-bottom: 15px; text-shadow: 2px 2px 4px #000; font-size: 28px; letter-spacing: 1px; }
+        
+        .mode-options, .setup-options { display: flex; gap: 10px; justify-content: center; margin-bottom: 15px; }
+        .mode-btn, .player-btn { background: #334155; color: white; border: 2px solid #64748b; padding: 10px; font-size: 14px; font-weight: bold; border-radius: 12px; cursor: pointer; transition: 0.3s; flex: 1; }
+        .mode-btn.selected { background: #ED1C24; border-color: #fff; box-shadow: 0 0 10px #ED1C24; }
+        .player-btn.selected { background: #00A8F3; border-color: #fff; box-shadow: 0 0 10px #00A8F3; }
+        
+        .name-inputs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; text-align: left; }
+        .name-inputs input { width: 100%; padding: 10px; border-radius: 8px; border: none; font-size: 14px; font-weight: bold; }
+        .name-inputs input:disabled { background: #94a3b8; color: #333; }
+        #input-0 { border-left: 5px solid #00A8F3; } #input-1 { border-left: 5px solid #ED1C24; }
+        #input-2 { border-left: 5px solid #22B14C; } #input-3 { border-left: 5px solid #FFF200; }
+
+        .start-btn { background: #ED1C24; color: white; border: none; padding: 15px; width: 100%; font-size: 18px; font-weight: bold; border-radius: 15px; cursor: pointer; transition: 0.3s; text-transform: uppercase; letter-spacing: 2px; }
+        .start-btn:hover { background: #ff333a; transform: scale(1.05); box-shadow: 0 0 20px #ED1C24; }
+
+        /* --- MODALS UI --- */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.9); display: none; justify-content: center; align-items: center; z-index: 2000; flex-direction: column; backdrop-filter: blur(5px); }
+        .modal-content { background: #1e293b; padding: 25px; border-radius: 20px; text-align: center; border: 3px solid #fff; max-width: 85%; box-shadow: 0 10px 40px rgba(0,0,0,0.8); animation: popIn 0.5s ease; }
+        @keyframes popIn { 0% { transform: scale(0.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+        .modal-title { font-size: 22px; font-weight: bold; margin-bottom: 15px; text-shadow: 1px 1px 3px #000; }
+        .modal-body { font-size: 16px; margin-bottom: 20px; line-height: 1.5; }
+        .modal-btn { background: #fff; color: #000; padding: 10px 20px; border-radius: 10px; font-weight: bold; cursor: pointer; border: none; font-size: 16px; }
+
+        /* --- GAME UI WRAPPER --- */
+        .game-wrapper { display: none; flex-direction: column; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 100%; max-width: 800px; padding: 10px; }
+
+        .top-bar { width: min(98vw, 72vh); display: flex; justify-content: space-between; align-items: center; }
+        .top-bar .brand { font-size: 16px; font-weight: 900; color: #FFF200; text-shadow: 1px 1px 2px rgba(0,0,0,0.8); }
+        .top-bar .controls { display: flex; gap: 8px; }
+        .icon-btn { background: rgba(30, 41, 59, 0.85); border: 2px solid #fff; color: white; width: 35px; height: 35px; border-radius: 50%; font-size: 16px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.3s; }
+        .icon-btn:hover { background: #00A8F3; transform: scale(1.1); }
+        .icon-btn.red:hover { background: #ED1C24; }
+        .icon-btn.mic-off { background: #ED1C24; color: white; }
+
+        .player-row { display: flex; justify-content: space-between; width: min(98vw, 72vh); }
+        .player-panel { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.5); padding: 5px 12px; border-radius: 12px; transition: all 0.3s ease; opacity: 0.2; pointer-events: none; border: 2px solid transparent; visibility: hidden; cursor: pointer; }
+        .player-panel.in-game { visibility: visible; opacity: 0.5; }
+        .player-panel.active { opacity: 1; transform: scale(1.05); background: rgba(0,0,0,0.8); }
+        .player-panel.active:not(.bot-turn) { pointer-events: auto; } 
+        .player-panel.finished { opacity: 0.3 !important; filter: grayscale(80%); pointer-events: none; }
+        
+        .panel-0.active { border-color: #00A8F3; box-shadow: 0 0 15px #00A8F3; } .panel-1.active { border-color: #ED1C24; box-shadow: 0 0 15px #ED1C24; } 
+        .panel-2.active { border-color: #22B14C; box-shadow: 0 0 15px #22B14C; } .panel-3.active { border-color: #FFF200; box-shadow: 0 0 15px #FFF200; } 
+
+        .player-name { font-weight: bold; font-size: 14px; text-shadow: 1px 1px 2px black; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+        .dice-box { width: 40px; height: 40px; background: white; color: black; font-size: 24px; display: flex; justify-content: center; align-items: center; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); border: 2px solid #ccc; transition: 0.2s; pointer-events: none; }
+        .player-panel:active .dice-box { transform: scale(0.90); }
+
+        #message-bar { display: none !important; }
+
+        /* --- BOARD --- */
+        .board { width: min(98vw, 72vh); height: min(98vw, 72vh); flex-shrink: 0; display: grid; grid-template-columns: repeat(15, 1fr); grid-template-rows: repeat(15, 1fr); background-color: white; border: clamp(4px, 1vmin, 8px) solid #333; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); position: relative; }
+        .cell { border: 1px solid #ccc; display: flex; justify-content: center; align-items: center; }
+        .bg-blue { background-color: #00A8F3; } .bg-red { background-color: #ED1C24; } .bg-yellow { background-color: #FFF200; } .bg-green { background-color: #22B14C; }
+        .safe-star::after { content: '★'; color: rgba(0,0,0,0.3); font-size: clamp(12px, 3vmin, 20px); }
+
+        .home-center { grid-row: 7 / 10; grid-column: 7 / 10; background: conic-gradient(from 45deg, #22B14C 0deg 90deg, #FFF200 90deg 180deg, #00A8F3 180deg 270deg, #ED1C24 270deg 360deg); position: relative; display: flex; justify-content: center; align-items: center; border: 2px solid #333; box-shadow: inset 0 0 15px rgba(0,0,0,0.6); overflow: hidden; }
+        .home-center::before, .home-center::after { content: ''; position: absolute; background: #333; }
+        .home-center::before { width: 150%; height: 2px; transform: rotate(45deg); } .home-center::after { width: 150%; height: 2px; transform: rotate(-45deg); }
+        .home-icon { font-size: clamp(18px, 4.5vmin, 30px); z-index: 2; background: white; border-radius: 50%; padding: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.6), inset 0 2px 4px rgba(0,0,0,0.2); display: flex; justify-content: center; align-items: center; border: 2px solid #333; }
+
+        /* --- TOKENS --- */
+        .token { position: absolute; z-index: 10; cursor: pointer; display: flex; justify-content: center; align-items: center; background: transparent; transition: left 0.25s linear, top 0.25s linear, transform 0.2s ease, width 0.2s, height 0.2s; transform: translate(-50%, -50%); display: none; }
+        .token.blue { --col-light: #1565C0; --col-mid: #0D47A1; --col-dark: #002171; --glow: #0D47A1; } .token.red { --col-light: #C62828; --col-mid: #B71C1C; --col-dark: #7F0000; --glow: #B71C1C; } .token.green { --col-light: #2E7D32; --col-mid: #1B5E20; --col-dark: #003300; --glow: #1B5E20; } .token.yellow { --col-light: #F9A825; --col-mid: #F57F17; --col-dark: #BC5100; --glow: #F57F17; }
+        .token::after { content: ''; width: 75%; height: 75%; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.6); background: radial-gradient(circle at 35% 35%, var(--col-light) 5%, var(--col-mid) 40%, var(--col-dark) 90%); box-shadow: 0 5px 8px rgba(0,0,0,0.8), inset -3px -3px 6px rgba(0,0,0,0.6), inset 3px 3px 6px rgba(255,255,255,0.4); transition: all 0.2s ease; pointer-events: none; }
+        .token.in-game { display: flex; }
+
+        @keyframes gentleBounceFlat { 0% { transform: scale(1) translateY(0); box-shadow: 0 5px 8px rgba(0,0,0,0.8); border-color: rgba(255, 255, 255, 0.6); } 50% { transform: scale(1.1) translateY(-10%); box-shadow: 0 12px 15px rgba(0,0,0,0.6); border-color: var(--glow); } 100% { transform: scale(1) translateY(0); box-shadow: 0 5px 8px rgba(0,0,0,0.8); border-color: rgba(255, 255, 255, 0.6); } }
+        .token.highlight::after { animation: gentleBounceFlat 0.8s infinite ease-in-out; } .token.highlight { z-index: 25; }
+        .watermark { margin-top: 5px; font-size: 0.8rem; font-weight: 800; color: #FFF200; text-shadow: 2px 2px 4px rgba(0,0,0,0.8); }
+    </style>
+</head>
+<body>
+
+    <div id="game-modal" class="modal-overlay">
+        <div class="modal-content" id="modal-box">
+            <div id="modal-title" class="modal-title">Title</div>
+            <div id="modal-body" class="modal-body">Body text goes here.</div>
+            <button id="modal-btn" class="modal-btn" onclick="closeModal()" style="display:none;">Continue</button>
+        </div>
+    </div>
+
+    <div id="setup-screen">
+        <div class="setup-box">
+            <h1>LUDO MASTER</h1>
+            
+            <div class="mode-options">
+                <button class="mode-btn selected" id="mode-local" onclick="selectGameMode('local', this)">Pass & Play</button>
+                <button class="mode-btn" id="mode-bot" onclick="selectGameMode('bot', this)">Vs Computer</button>
+                <button class="mode-btn" id="mode-online" onclick="selectGameMode('online', this)">🌐 Online</button>
+            </div>
+
+            <div class="setup-options">
+                <button class="player-btn" onclick="selectPlayers(2, this)">2 Player</button>
+                <button class="player-btn" onclick="selectPlayers(3, this)">3 Player</button>
+                <button class="player-btn selected" onclick="selectPlayers(4, this)">4 Player</button>
+            </div>
+
+            <div class="name-inputs" id="name-inputs">
+                <input type="text" id="input-0" placeholder="Blue Player Name" value="PhantomGaze">
+                <input type="text" id="input-1" placeholder="Red Player Name" value="Red">
+                <input type="text" id="input-2" placeholder="Green Player Name" value="Green">
+                <input type="text" id="input-3" placeholder="Yellow Player Name" value="Yellow">
+            </div>
+
+            <button class="start-btn" id="start-btn" onclick="startGame()">Play Now</button>
+            
+            <div id="online-actions" style="display:none; gap: 10px; width: 100%;">
+                <button class="start-btn" style="background:#00A8F3; flex:1;" onclick="createOnlineRoom()">Create Room</button>
+                <button class="start-btn" style="background:#ED1C24; flex:1;" onclick="joinOnlineRoom()">Join Room</button>
+            </div>
+        </div>
+        <div class="watermark">Cassandra X R. Abhishek</div>
+    </div>
+
+    <div class="game-wrapper" id="game-wrapper">
+        <div class="top-bar">
+            <div class="brand" id="brand-text">LUDO MASTER</div>
+            <div class="controls">
+                <button class="icon-btn" id="mic-btn" onclick="toggleMic()" title="Voice Chat On/Off" style="display:none;">🎤</button>
+                <button class="icon-btn" id="mute-btn" onclick="toggleMute()" title="Mute/Unmute Audio">🔊</button>
+                <button class="icon-btn" id="vibrate-btn" onclick="toggleVibrate()" title="Vibration On/Off">📳</button>
+                <button class="icon-btn red" onclick="clearGameState()" title="Restart Game">🔄</button>
+            </div>
+        </div>
+
+        <div class="player-row">
+            <div class="player-panel panel-0" id="panel-0" onclick="diceClicked(0)">
+                <div class="player-name" id="name-display-0" style="color:#00A8F3;">Blue</div>
+                <div class="dice-box" id="dice-0">🎲</div>
+            </div>
+            <div class="player-panel panel-1" id="panel-1" onclick="diceClicked(1)">
+                <div class="dice-box" id="dice-1">🎲</div>
+                <div class="player-name" id="name-display-1" style="color:#ED1C24;">Red</div>
+            </div>
+        </div>
+
+        <div id="message-bar">Loading...</div>
+
+        <div class="board" id="board"></div>
+
+        <div class="player-row">
+            <div class="player-panel panel-3" id="panel-3" onclick="diceClicked(3)">
+                <div class="player-name" id="name-display-3" style="color:#FFF200;">Yellow</div>
+                <div class="dice-box" id="dice-3">🎲</div>
+            </div>
+            <div class="player-panel panel-2" id="panel-2" onclick="diceClicked(2)">
+                <div class="dice-box" id="dice-2">🎲</div>
+                <div class="player-name" id="name-display-2" style="color:#22B14C;">Green</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="audio-container" style="display: none;"></div>
+
+    <script>
+        const GAME_VERSION = "3.5"; // Anti-Glitch Server Sync Edition
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyAKv2mbAUEMWRyx50zloBVy418UnLiiqBU",
+            authDomain: "ludo-master-test-9a39a.firebaseapp.com",
+            databaseURL: "https://ludo-master-test-9a39a-default-rtdb.firebaseio.com",
+            projectId: "ludo-master-test-9a39a",
+            storageBucket: "ludo-master-test-9a39a.firebasestorage.app",
+            messagingSenderId: "561434450367",
+            appId: "1:561434450367:web:f579cfc7961f0d800ce90a"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        const killSound = new Audio('https://raw.githubusercontent.com/Abhishekrai07/Ludo-Sound/main/FAAAH%20-%20QuickSounds.com.mp3'); 
+        const spawnSound = new Audio('https://raw.githubusercontent.com/Abhishekrai07/Ludo-Sound/main/Rom-Rom-Bhaiyo.mp3');
+        const homeSound = new Audio('https://raw.githubusercontent.com/Abhishekrai07/Ludo-Sound/main/Abhi-Maja-Aayega-Na-Bhidu.mp3');
+        const diceSound = new Audio('https://raw.githubusercontent.com/Abhishekrai07/Ludo-Sound/main/Dice%20Rolling.mp3');
+        const moveSound = new Audio('https://raw.githubusercontent.com/Abhishekrai07/Ludo-Sound/main/Droplet.mp3');
+        const gameOverSound = new Audio('https://raw.githubusercontent.com/Abhishekrai07/Ludo-Sound/main/Game%20Over.mp3');
+        const safeSound = new Audio('https://raw.githubusercontent.com/Abhishekrai07/Ludo-Sound/main/sholay---bach-gaya-saala-made-with-Voicemod.mp3');
+
+        let isMuted = localStorage.getItem('ludo_muted') === 'true';
+        let isVibrateEnabled = localStorage.getItem('ludo_vibrate') !== 'false'; 
+
+        let gameMode = 'local'; let selectedPlayerCount = 4; let activePlayers = []; let finishedPlayers = []; 
+        let currentTurnIndex = 0; let currentTurn = 0; let diceValue = 0; let isRolled = false; 
+        
+        // BUG FIX 1: Lock Variables
+        let isAnimating = false; 
+        let isRolling = false; 
+        
+        let consecutiveSixes = 0; let tokens = [];
+
+        let myOnlineId = -1; let roomCode = null; let lastActionId = null;
+        let peer = null; let myAudioStream = null; let isMicEnabled = true;
+
+        let playersInfo = [
+            { id: 0, color: 'blue', hex: '#00A8F3', startIndex: 0, name: 'PhantomGaze', isBot: false },
+            { id: 1, color: 'red', hex: '#ED1C24', startIndex: 13, name: 'Red', isBot: false },
+            { id: 2, color: 'green', hex: '#22B14C', startIndex: 26, name: 'Green', isBot: false },
+            { id: 3, color: 'yellow', hex: '#FFF200', startIndex: 39, name: 'Yellow', isBot: false }
+        ];
+
+        const pathMap = [
+            [7,2],[7,3],[7,4],[7,5],[7,6], [6,7],[5,7],[4,7],[3,7],[2,7],[1,7],
+            [1,8],[1,9], [2,9],[3,9],[4,9],[5,9],[6,9], [7,10],[7,11],[7,12],[7,13],[7,14],[7,15],
+            [8,15],[9,15], [9,14],[9,13],[9,12],[9,11],[9,10], [10,9],[11,9],[12,9],[13,9],[14,9],[15,9],
+            [15,8],[15,7], [14,7],[13,7],[12,7],[11,7],[10,7], [9,6],[9,5],[9,4],[9,3],[9,2],[9,1],
+            [8,1],[7,1]
+        ];
+        const homeStretchMap = {
+            blue: [[8,2], [8,3], [8,4], [8,5], [8,6], [8,7]], red: [[2,8], [3,8], [4,8], [5,8], [6,8], [7,8]],
+            green: [[8,14], [8,13], [8,12], [8,11], [8,10], [8,9]], yellow: [[14,8], [13,8], [12,8], [11,8], [10,8], [9,8]]
+        };
+        const baseMap = {
+            blue: [[2.5, 2.5], [2.5, 4.5], [4.5, 2.5], [4.5, 4.5]], red: [[2.5, 11.5], [2.5, 13.5], [4.5, 11.5], [4.5, 13.5]],
+            green: [[11.5, 11.5], [11.5, 13.5], [13.5, 11.5], [13.5, 13.5]], yellow: [[11.5, 2.5], [11.5, 4.5], [13.5, 2.5], [13.5, 4.5]]
+        };
+
+        function toggleMute() { isMuted = !isMuted; localStorage.setItem('ludo_muted', isMuted); document.getElementById('mute-btn').innerText = isMuted ? '🔇' : '🔊'; }
+        function toggleVibrate() { isVibrateEnabled = !isVibrateEnabled; localStorage.setItem('ludo_vibrate', isVibrateEnabled); document.getElementById('vibrate-btn').innerText = isVibrateEnabled ? '📳' : '📴'; if (isVibrateEnabled) triggerHaptic(50); }
+        function playSfx(audioObj) { if (!isMuted) { audioObj.currentTime = 0; audioObj.play().catch(e => {}); } }
+        function triggerHaptic(pattern) { if (isVibrateEnabled && navigator.vibrate) { try { navigator.vibrate(pattern); } catch (e) {} } }
+
+        document.getElementById('mute-btn').innerText = isMuted ? '🔇' : '🔊';
+        document.getElementById('vibrate-btn').innerText = isVibrateEnabled ? '📳' : '📴';
+
+        function showModal(title, bodyHtml, colorHex, showButton = false) {
+            document.getElementById('modal-title').innerText = title; document.getElementById('modal-title').style.color = colorHex;
+            document.getElementById('modal-body').innerHTML = bodyHtml; document.getElementById('modal-box').style.borderColor = colorHex;
+            document.getElementById('modal-btn').style.display = showButton ? 'inline-block' : 'none'; document.getElementById('game-modal').style.display = 'flex';
+        }
+        function closeModal() { document.getElementById('game-modal').style.display = 'none'; }
+
+        function selectGameMode(mode, btnElement) {
+            gameMode = mode; document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('selected')); btnElement.classList.add('selected');
+            if(mode === 'online') {
+                document.getElementById('start-btn').style.display = 'none'; document.getElementById('online-actions').style.display = 'flex';
+                for(let i=1; i<=3; i++) { document.getElementById(`input-${i}`).disabled = false; playersInfo[i].isBot = false; }
+            } else {
+                document.getElementById('start-btn').style.display = 'block'; document.getElementById('online-actions').style.display = 'none';
+                for(let i=1; i<=3; i++) { let inp = document.getElementById(`input-${i}`); if (mode === 'bot') { inp.disabled = true; inp.value = `Computer ${i}`; playersInfo[i].isBot = true; } else { inp.disabled = false; inp.value = playersInfo[i].color.charAt(0).toUpperCase() + playersInfo[i].color.slice(1); playersInfo[i].isBot = false; } }
+            }
+        }
+
+        function selectPlayers(count, btnElement) {
+            selectedPlayerCount = count; document.querySelectorAll('.player-btn').forEach(btn => btn.classList.remove('selected')); btnElement.classList.add('selected');
+            document.getElementById('input-2').style.display = count >= 3 ? 'block' : 'none'; document.getElementById('input-3').style.display = count === 4 ? 'block' : 'none';
+        }
+
+        function setupVoiceChat() {
+            try {
+                navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then(stream => {
+                    myAudioStream = stream;
+                    let micBtn = document.getElementById('mic-btn'); micBtn.style.display = 'flex'; 
+                    let myPeerId = `ludo-room-${roomCode}-${myOnlineId}`; 
+                    
+                    // BUG FIX 3: Ping Interval to keep connection alive
+                    peer = new Peer(myPeerId, { pingInterval: 5000 });
+                    
+                    peer.on('call', call => { call.answer(myAudioStream); call.on('stream', remoteStream => { playRemoteAudio(remoteStream, call.peer); }); });
+                    peer.on('open', id => {
+                        for(let i = 0; i < myOnlineId; i++) {
+                            if(activePlayers.includes(i)) {
+                                let targetPeerId = `ludo-room-${roomCode}-${i}`; let call = peer.call(targetPeerId, myAudioStream);
+                                call.on('stream', remoteStream => { playRemoteAudio(remoteStream, targetPeerId); });
+                            }
+                        }
+                    });
+                }).catch(err => { alert("Mic permission denied. Game will continue without Voice Chat."); });
+            } catch(e) { console.log("WebRTC not supported."); }
+        }
+
+        function playRemoteAudio(stream, peerId) {
+            if(!document.getElementById(peerId)) {
+                let audioObj = document.createElement('audio'); audioObj.id = peerId; audioObj.autoplay = true; audioObj.srcObject = stream;
+                document.getElementById('audio-container').appendChild(audioObj);
+                
+                // BUG FIX 3: Force play and catch error
+                audioObj.play().catch(e => console.log("Audio Autoplay Blocked. Interact with page."));
+            }
+        }
+
+        function toggleMic() {
+            if(myAudioStream) {
+                isMicEnabled = !isMicEnabled; myAudioStream.getAudioTracks()[0].enabled = isMicEnabled;
+                let micBtn = document.getElementById('mic-btn');
+                if(isMicEnabled) { micBtn.innerText = '🎤'; micBtn.classList.remove('mic-off'); } else { micBtn.innerText = '🔇'; micBtn.classList.add('mic-off'); }
+            }
+        }
+
+        function createOnlineRoom() {
+            roomCode = Math.floor(1000 + Math.random() * 9000).toString(); myOnlineId = 0; 
+            if(selectedPlayerCount === 2) activePlayers = [0, 2]; else if(selectedPlayerCount === 3) activePlayers = [0, 1, 2]; else activePlayers = [0, 1, 2, 3]; 
+            playersInfo[0].name = document.getElementById('input-0').value.trim() || "Host";
+            activePlayers.forEach(id => { if(id !== 0) playersInfo[id].name = "Waiting..."; });
+            startGame(true); saveGameState(); 
+            alert(`Your Room Code is: ${roomCode}\nShare this with up to ${selectedPlayerCount - 1} friends to let them join!`);
+            listenToRoom(); setupVoiceChat(); 
+        }
+
+        function joinOnlineRoom() {
+            let code = prompt("Enter 4-digit Room Code to join:"); if(!code || code.length !== 4) return; roomCode = code;
+            let myName = prompt("Enter Your Name:", "Player"); if(!myName) myName = "Friend";
+            db.ref('rooms/' + roomCode).once('value', snapshot => {
+                let data = snapshot.val(); if(!data) { alert("Room not found!"); return; }
+                
+                gameMode = 'online'; activePlayers = data.state.activePlayers; selectedPlayerCount = activePlayers.length;
+                let slotFound = -1;
+                for(let id of activePlayers) { if(data.state.playersInfoNames[id] === "Waiting...") { slotFound = id; break; } }
+                if(slotFound === -1) { alert("Room is already full!"); return; }
+                
+                myOnlineId = slotFound; playersInfo[myOnlineId].name = myName;
+                db.ref(`rooms/${roomCode}/state/playersInfoNames/${myOnlineId}`).set(myName);
+                
+                startGame(true); listenToRoom(); setupVoiceChat(); 
+            });
+        }
+
+        function listenToRoom() {
+            db.ref('rooms/' + roomCode + '/state').on('value', snapshot => { 
+                let data = snapshot.val(); 
+                // BUG FIX 1: Don't load data if currently animating or rolling to prevent UI glitch
+                if(data && !isAnimating && !isRolling) loadFromData(data); 
+            });
+
+            db.ref('rooms/' + roomCode + '/action').on('value', snapshot => {
+                let action = snapshot.val();
+                if(action && action.id !== lastActionId) {
+                    lastActionId = action.id;
+                    if(action.type === 'ROLL') { 
+                        isRolling = true; // Lock for receiver
+                        executeRoll(action.by, action.result); 
+                    } 
+                    else if(action.type === 'MOVE') { 
+                        isAnimating = true; // Lock for receiver
+                        let t = tokens.find(tok => tok.color === action.color && tok.id === action.tokenId); 
+                        if(t) executeMove(t); 
+                    }
+                }
+            });
+        }
+
+        function loadFromData(data) {
+            gameMode = data.gameMode || 'online'; activePlayers = data.activePlayers; finishedPlayers = data.finishedPlayers || [];
+            if(data.playersInfoNames) data.playersInfoNames.forEach((n, i) => playersInfo[i].name = n);
+            currentTurnIndex = data.currentTurnIndex; currentTurn = data.currentTurn; diceValue = data.diceValue; isRolled = data.isRolled; consecutiveSixes = data.consecutiveSixes || 0;
+            
+            document.getElementById('setup-screen').style.display = 'none'; document.getElementById('game-wrapper').style.display = 'flex';
+            if(tokens.length === 0) initBoard(); 
+            
+            data.tokenStates.forEach((ts, idx) => { tokens[idx].state = ts.state; tokens[idx].pos = ts.pos; });
+            if (isRolled && !finishedPlayers.includes(currentTurn)) document.getElementById(`dice-${currentTurn}`).innerText = diceFaces[diceValue - 1] || '🎲'; else document.getElementById(`dice-${currentTurn}`).innerText = '🎲';
+
+            activePlayers.forEach(id => { let pnl = document.getElementById(`panel-${id}`); pnl.classList.add('in-game'); if(finishedPlayers.includes(id)) pnl.classList.add('finished'); });
+            tokens.forEach(t => { if(activePlayers.includes(t.playerIndex)) t.el.classList.add('in-game'); });
+            playersInfo.forEach((p, idx) => { document.getElementById(`name-display-${idx}`).innerText = p.name; });
+
+            let colorName = playersInfo[myOnlineId] ? playersInfo[myOnlineId].color.toUpperCase() : '';
+            document.getElementById('brand-text').innerText = `ROOM: ${roomCode} | You are ${colorName}`;
+            updateTurnUI(); updateTokensPosition();
+            
+            // Re-highlight valid tokens if it's my turn after data load
+            if(gameMode === 'online' && isRolled && myOnlineId === currentTurn && !isAnimating && !isRolling) {
+                let myTokens = tokens.filter(t => t.playerIndex === currentTurn);
+                let validTokens = myTokens.filter(t => { if (t.state === 'base' && diceValue === 6) return true; if (t.state === 'path' && (t.pos + diceValue <= 56)) return true; return false; });
+                validTokens.forEach(t => t.el.classList.add('highlight'));
+            }
+        }
+
+        function startGame(isOnlineBypass = false) {
+            if (!isOnlineBypass) {
+                playersInfo[0].name = document.getElementById('input-0').value.trim() || "Player 1";
+                for(let i=1; i<4; i++) playersInfo[i].name = document.getElementById(`input-${i}`).value.trim() || `Player ${i+1}`;
+                if(selectedPlayerCount === 2) activePlayers = [0, 2]; else if(selectedPlayerCount === 3) activePlayers = [0, 1, 2]; else activePlayers = [0, 1, 2, 3]; 
+                currentTurnIndex = 0; currentTurn = activePlayers[currentTurnIndex];
+            } else { currentTurnIndex = 0; currentTurn = activePlayers[currentTurnIndex]; }
+
+            playersInfo.forEach((p, idx) => { document.getElementById(`name-display-${idx}`).innerText = p.name; });
+            document.getElementById('setup-screen').style.display = 'none'; document.getElementById('game-wrapper').style.display = 'flex';
+
+            initBoard(); 
+            activePlayers.forEach(id => { let pnl = document.getElementById(`panel-${id}`); pnl.classList.add('in-game'); if(finishedPlayers.includes(id)) pnl.classList.add('finished'); });
+            tokens.forEach(t => { if(activePlayers.includes(t.playerIndex)) t.el.classList.add('in-game'); });
+            updateTurnUI(); setTimeout(updateTokensPosition, 100); 
+            if(!isOnlineBypass) saveGameState();
+        }
+
+        const board = document.getElementById('board');
+        function initBoard() {
+            board.innerHTML = "";
+            for (let r = 1; r <= 15; r++) {
+                for (let c = 1; c <= 15; c++) {
+                    if ((r<=6 && c<=6) || (r<=6 && c>=10) || (r>=10 && c<=6) || (r>=10 && c>=10)) continue; 
+                    if (r>=7 && r<=9 && c>=7 && c<=9) continue;
+                    let cell = document.createElement('div'); cell.className = 'cell'; cell.style.gridRow = r; cell.style.gridColumn = c;
+                    if (r===8 && c>=2 && c<=6) cell.classList.add('bg-blue'); else if (r===8 && c>=10 && c<=14) cell.classList.add('bg-green'); else if (c===8 && r>=2 && r<=6) cell.classList.add('bg-red'); else if (c===8 && r>=10 && r<=14) cell.classList.add('bg-yellow');
+                    else if (r===7 && c===2) cell.classList.add('bg-blue', 'safe-star'); else if (r===2 && c===9) cell.classList.add('bg-red', 'safe-star'); else if (r===14 && c===7) cell.classList.add('bg-yellow', 'safe-star'); else if (r===9 && c===14) cell.classList.add('bg-green', 'safe-star'); else if ((r===3 && c===7) || (r===7 && c===13) || (r===13 && c===9) || (r===9 && c===3)) cell.classList.add('safe-star');
+                    board.appendChild(cell);
+                }
+            }
+            let centerHome = document.createElement('div'); centerHome.className = 'home-center'; centerHome.innerHTML = '<div class="home-icon">🏡</div>'; board.appendChild(centerHome);
+
+            function buildYard(rStart, rEnd, cStart, cEnd, colorClass, spots) {
+                let yard = document.createElement('div'); yard.style.gridRow = `${rStart} / ${rEnd + 1}`; yard.style.gridColumn = `${cStart} / ${cEnd + 1}`; yard.classList.add(colorClass); yard.style.border = "1px solid #333"; board.appendChild(yard);
+                let inner = document.createElement('div'); inner.style.gridRow = `${rStart+1} / ${rEnd}`; inner.style.gridColumn = `${cStart+1} / ${cEnd}`; inner.style.backgroundColor = "#fff"; inner.style.borderRadius = "15px"; inner.style.boxShadow = "inset 0 0 10px rgba(0,0,0,0.3)"; inner.style.position = "relative"; board.appendChild(inner);
+                const spotCoords = [[25,25], [25,75], [75,25], [75,75]];
+                spotCoords.forEach(pos => { let spot = document.createElement('div'); spot.style.position = 'absolute'; spot.style.top = `${pos[0]}%`; spot.style.left = `${pos[1]}%`; spot.style.transform = 'translate(-50%, -50%)'; spot.style.width = '38%'; spot.style.height = '38%'; spot.classList.add(colorClass); spot.style.borderRadius = "50%"; spot.style.boxShadow = "inset 0 3px 6px rgba(0,0,0,0.4)"; inner.appendChild(spot); });
+            }
+
+            buildYard(1, 6, 1, 6, 'bg-blue', baseMap.blue); buildYard(1, 6, 10, 15, 'bg-red', baseMap.red); buildYard(10, 15, 1, 6, 'bg-yellow', baseMap.yellow); buildYard(10, 15, 10, 15, 'bg-green', baseMap.green);
+
+            tokens = [];
+            playersInfo.forEach(player => {
+                for(let i=0; i<4; i++) {
+                    let t = document.createElement('div'); t.className = `token ${player.color}`; t.id = `${player.color}-${i}`; board.appendChild(t);
+                    let tokenData = { el: t, color: player.color, id: i, state: 'base', pos: -1, playerIndex: player.id };
+                    tokens.push(tokenData); t.addEventListener('click', () => tokenClicked(tokenData));
+                }
+            });
+        }
+
+        function updateTokensPosition() {
+            const cellW = board.clientWidth / 15; const cellH = board.clientHeight / 15;
+            let gridPositions = {};
+            tokens.forEach(t => {
+                if(t.state === 'path') { let r, c; if (t.pos <= 50) { let globalIndex = (playersInfo[t.playerIndex].startIndex + t.pos) % 52; r = pathMap[globalIndex][0]; c = pathMap[globalIndex][1]; } else { r = homeStretchMap[t.color][t.pos - 51][0]; c = homeStretchMap[t.color][t.pos - 51][1]; } let key = `${r}-${c}`; if(!gridPositions[key]) gridPositions[key] = []; gridPositions[key].push(t); }
+            });
+
+            tokens.forEach(t => {
+                let r, c, shiftX = 0, shiftY = 0, scale = 1;
+                if (t.state === 'base') { r = baseMap[t.color][t.id][0]; c = baseMap[t.color][t.id][1]; scale = 1.45; } 
+                else if (t.state === 'home') { const homePositions = { blue: { r: 8, c: 7.3 }, red: { r: 7.3, c: 8 }, green: { r: 8, c: 8.7 }, yellow: { r: 8.7, c: 8 } }; r = homePositions[t.color].r; c = homePositions[t.color].c; scale = 0.55; const homeOffsets = [[-8,-8], [8,-8], [-8,8], [8,8]]; shiftX = homeOffsets[t.id][0]; shiftY = homeOffsets[t.id][1]; t.el.style.zIndex = 50; } 
+                else {
+                    if (t.pos <= 50) { let globalIndex = (playersInfo[t.playerIndex].startIndex + t.pos) % 52; r = pathMap[globalIndex][0]; c = pathMap[globalIndex][1]; } else { r = homeStretchMap[t.color][t.pos - 51][0]; c = homeStretchMap[t.color][t.pos - 51][1]; }
+                    let group = gridPositions[`${r}-${c}`];
+                    if(group && group.length > 1) { scale = 0.55; let idx = group.indexOf(t); const offX = cellW * 0.18; const offY = cellH * 0.18; const offsets = [[-offX, -offY], [offX, offY], [-offX, offY], [offX, -offY], [0, -offY*1.5], [-offX*1.5, 0], [offX*1.5, 0], [0, offY*1.5]]; if(idx < offsets.length) { shiftX = offsets[idx][0]; shiftY = offsets[idx][1]; } } else { scale = 0.75; }
+                }
+                t.el.style.width = `${cellW * 1.2}px`; t.el.style.height = `${cellH * 1.2}px`; t.el.style.left = `calc(${(c - 1) * cellW + (cellW / 2)}px + ${shiftX}px)`; t.el.style.top = `calc(${(r - 1) * cellH + (cellH / 2)}px + ${shiftY}px)`; t.el.style.transform = `translate(-50%, -50%) scale(${scale})`;
+            });
+        }
+
+        function updateTurnUI() {
+            for(let i=0; i<4; i++) { document.getElementById(`panel-${i}`).classList.remove('active', 'bot-turn'); }
+            let activePanel = document.getElementById(`panel-${currentTurn}`); activePanel.classList.add('active');
+            if(gameMode === 'bot' && playersInfo[currentTurn].isBot) { activePanel.classList.add('bot-turn'); if(!isRolled && !isAnimating) setTimeout(() => diceClicked(currentTurn), 800); }
+        }
+
+        const diceFaces = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+        
+        function diceClicked(playerIndex) {
+            if (isRolled || isAnimating || isRolling || playerIndex !== currentTurn || finishedPlayers.includes(currentTurn)) return;
+            if (gameMode === 'online' && myOnlineId !== currentTurn) { alert("It's not your turn!"); return; }
+            
+            // BUG FIX 1: Lock Immediately to prevent double click spam
+            isRolling = true; 
+            
+            let result = Math.floor(Math.random() * 6) + 1;
+            if (gameMode === 'online') { db.ref(`rooms/${roomCode}/action`).set({ type: 'ROLL', by: playerIndex, result: result, id: Date.now() }); } else { executeRoll(playerIndex, result); }
+        }
+
+        function executeRoll(playerIndex, result) {
+            let activeDiceEl = document.getElementById(`dice-${currentTurn}`); let count = 0;
+            playSfx(diceSound); triggerHaptic(50); 
+            let interval = setInterval(() => {
+                activeDiceEl.innerText = diceFaces[Math.floor(Math.random() * 6)]; count++;
+                if (count > 10) {
+                    clearInterval(interval); diceValue = result; activeDiceEl.innerText = diceFaces[diceValue - 1]; isRolled = true; isRolling = false;
+                    
+                    if(diceValue === 6) triggerHaptic([50, 50, 50]); 
+                    if (diceValue === 6) { 
+                        consecutiveSixes++; 
+                        if (consecutiveSixes === 3) { 
+                            triggerHaptic([200, 100, 200]); consecutiveSixes = 0; isRolled = false; 
+                            
+                            // BUG FIX 2: Only Host processes next turn execution
+                            if (gameMode === 'online') {
+                                if (myOnlineId === 0) setTimeout(nextTurn, 500); 
+                            } else {
+                                setTimeout(nextTurn, 500); 
+                            }
+                            return; 
+                        } 
+                    } else { consecutiveSixes = 0; }
+                    
+                    checkPossibleMoves(); 
+                }
+            }, 50);
+        }
+
+        function checkPossibleMoves() {
+            let myTokens = tokens.filter(t => t.playerIndex === currentTurn);
+            let validTokens = myTokens.filter(t => { if (t.state === 'base' && diceValue === 6) return true; if (t.state === 'path' && (t.pos + diceValue <= 56)) return true; return false; });
+            tokens.forEach(t => t.el.classList.remove('highlight'));
+
+            if (validTokens.length === 0) { 
+                // BUG FIX 2: Master Sync Logic
+                if (gameMode === 'online') {
+                    if (myOnlineId === 0) setTimeout(nextTurn, 500); 
+                } else {
+                    setTimeout(nextTurn, 500); 
+                }
+            } else {
+                if(gameMode === 'bot' && playersInfo[currentTurn].isBot) {
+                    let bestToken = validTokens[0]; let maxScore = -1;
+                    for(let t of validTokens) {
+                        let score = 0; let nextPos = t.pos + diceValue;
+                        if (t.state === 'base' && diceValue === 6) score += 60; else if (nextPos === 56) score += 80; else if (nextPos < 51) {
+                            let globalIndex = (playersInfo[currentTurn].startIndex + nextPos) % 52; let isSafeStar = (globalIndex === 0 || globalIndex === 13 || globalIndex === 26 || globalIndex === 39 || globalIndex === 8 || globalIndex === 21 || globalIndex === 34 || globalIndex === 47);
+                            if (isSafeStar) score += 40; 
+                            let canKill = false; if (!isSafeStar) { tokens.forEach(enemy => { if (enemy.playerIndex !== currentTurn && enemy.state === 'path' && enemy.pos < 51 && activePlayers.includes(enemy.playerIndex)) { let enemyGlobalIndex = (playersInfo[enemy.playerIndex].startIndex + enemy.pos) % 52; if (enemyGlobalIndex === globalIndex) canKill = true; } }); }
+                            if (canKill) score += 100; score += t.pos; 
+                        } else { score += t.pos; }
+                        if (score > maxScore) { maxScore = score; bestToken = t; }
+                    }
+                    setTimeout(() => tokenClicked(bestToken), 700);
+                } else {
+                    if(gameMode !== 'online' || myOnlineId === currentTurn) {
+                        if (validTokens.length === 1) { setTimeout(() => tokenClicked(validTokens[0]), 350); } else { validTokens.forEach(t => t.el.classList.add('highlight')); }
+                    }
+                }
+            }
+        }
+
+        function tokenClicked(t) { 
+            if (gameMode === 'bot' && playersInfo[currentTurn].isBot) return; 
+            if (gameMode === 'online') { if (myOnlineId !== currentTurn) return; if (t.playerIndex !== myOnlineId) return; }
+            if (!isRolled || isAnimating || isRolling || t.playerIndex !== currentTurn) return;
+            if (t.state === 'base' && diceValue !== 6) return; if (t.state === 'path' && (t.pos + diceValue > 56)) return; 
+            
+            // BUG FIX 1: Lock Immediately
+            isAnimating = true; 
+            
+            if (gameMode === 'online') { db.ref(`rooms/${roomCode}/action`).set({ type: 'MOVE', color: t.color, tokenId: t.id, id: Date.now() }); } else { executeMove(t); }
+        }
+
+        function executeMove(t) {
+            isAnimating = true; tokens.forEach(tok => tok.el.classList.remove('highlight')); 
+            if (t.state === 'base' && diceValue === 6) { t.state = 'path'; t.pos = 0; playSfx(spawnSound); triggerHaptic([50, 50, 100]); updateTokensPosition(); setTimeout(finalizeMove, 50); } else if (t.state === 'path') {
+                let stepsLeft = diceValue;
+                function takeStep() {
+                    t.pos++; stepsLeft--; playSfx(moveSound); triggerHaptic(20); updateTokensPosition();
+                    if (stepsLeft > 0) { setTimeout(takeStep, 250); } else {
+                        let killed = false; let isSafeStar = false;
+                        if (t.pos === 56) { t.state = 'home'; playSfx(homeSound); triggerHaptic([100, 50, 100, 50, 100]); killed = true; updateTokensPosition(); } else if (t.pos < 51) {
+                            let globalIndex = (playersInfo[currentTurn].startIndex + t.pos) % 52;
+                            isSafeStar = (globalIndex === 0 || globalIndex === 13 || globalIndex === 26 || globalIndex === 39 || globalIndex === 8 || globalIndex === 21 || globalIndex === 34 || globalIndex === 47);
+                            tokens.forEach(enemy => {
+                                if (enemy.playerIndex !== currentTurn && enemy.state === 'path' && enemy.pos < 51 && activePlayers.includes(enemy.playerIndex)) {
+                                    let enemyGlobalIndex = (playersInfo[enemy.playerIndex].startIndex + enemy.pos) % 52;
+                                    if (!isSafeStar && enemyGlobalIndex === globalIndex) { enemy.state = 'base'; enemy.pos = -1; killed = true; playSfx(killSound); triggerHaptic([200, 50, 200]); updateTokensPosition(); }
+                                }
+                            });
+                        }
+                        if(killed) { diceValue = 6; consecutiveSixes = 0; } else if (isSafeStar && t.pos !== -1) { playSfx(safeSound); }
+                        setTimeout(finalizeMove, 50); 
+                    }
+                }
+                takeStep(); 
+            }
+        }
+
+        function checkWinCondition() {
+            if(finishedPlayers.includes(currentTurn)) return false; let myTokens = tokens.filter(t => t.playerIndex === currentTurn); let homeTokens = myTokens.filter(t => t.pos === 56);
+            if (homeTokens.length === 4) {
+                finishedPlayers.push(currentTurn); document.getElementById(`panel-${currentTurn}`).classList.add('finished');
+                let rank = finishedPlayers.length; let suffix = rank === 1 ? "st" : rank === 2 ? "nd" : "rd"; triggerHaptic([300, 100, 300, 100, 500]); 
+                if (finishedPlayers.length >= activePlayers.length - 1) {
+                    let lastPlayer = activePlayers.find(p => !finishedPlayers.includes(p)); if(lastPlayer !== undefined) finishedPlayers.push(lastPlayer); 
+                    let leaderboardHtml = "<h3>Final Standings:</h3><br>"; finishedPlayers.forEach((pid, i) => { leaderboardHtml += `<div style="color:${playersInfo[pid].hex}; margin: 5px; font-weight: bold;">${i+1} Place: ${playersInfo[pid].name}</div>`; });
+                    playSfx(gameOverSound); showModal("🏆 GAME OVER 🏆", leaderboardHtml, "#FFF200", true); document.getElementById('modal-btn').onclick = clearGameState; document.getElementById('modal-btn').innerText = "New Game"; return true;
+                } else {
+                    showModal(`🎉 Congratulations! 🎉`, `<strong style="color:${playersInfo[currentTurn].hex}">${playersInfo[currentTurn].name}</strong> finished in <strong>${rank}${suffix} Place!</strong><br><br><span style="font-size:14px;color:#ccc;">Game continues...</span>`, playersInfo[currentTurn].hex);
+                    setTimeout(() => { closeModal(); nextTurn(); }, 3500); return true; 
+                }
+            } return false;
+        }
+
+        function finalizeMove() { 
+            updateTokensPosition(); isAnimating = false; if (checkWinCondition()) return; 
+            if (diceValue === 6) { 
+                isRolled = false; 
+                // BUG FIX 2: Only Host Saves Core State
+                if (gameMode === 'online') { if (myOnlineId === 0) saveGameState(); } else { saveGameState(); }
+                if(gameMode === 'bot' && playersInfo[currentTurn].isBot) { setTimeout(() => diceClicked(currentTurn), 1200); } 
+            } else { 
+                if (gameMode === 'online') { if (myOnlineId === 0) nextTurn(); } else { nextTurn(); } 
+            } 
+        }
+        
+        function nextTurn() { 
+            if (gameMode === 'online' && myOnlineId !== 0) return; // EXTRA SECURITY
+            document.getElementById(`dice-${currentTurn}`).innerText = "🎲"; 
+            do { currentTurnIndex = (currentTurnIndex + 1) % activePlayers.length; currentTurn = activePlayers[currentTurnIndex]; } while (finishedPlayers.includes(currentTurn) && finishedPlayers.length < activePlayers.length); 
+            isRolled = false; updateTurnUI(); saveGameState(); 
+        }
+
+        function saveGameState() {
+            const state = { version: GAME_VERSION, gameMode, activePlayers, finishedPlayers, playersInfoNames: playersInfo.map(p => p.name), playersInfoBots: playersInfo.map(p => p.isBot), currentTurnIndex, currentTurn, diceValue, isRolled, consecutiveSixes, tokenStates: tokens.map(t => ({ state: t.state, pos: t.pos })) };
+            if (gameMode === 'online' && roomCode) { if (myOnlineId === 0) { db.ref('rooms/' + roomCode + '/state').set(state); } } else { localStorage.setItem('ludo_master_state', JSON.stringify(state)); }
+        }
+
+        function loadGameState() {
+            const saved = localStorage.getItem('ludo_master_state');
+            if (saved && gameMode !== 'online') {
+                const data = JSON.parse(saved); if(data.version !== GAME_VERSION) { localStorage.removeItem('ludo_master_state'); initBoard(); return; }
+                gameMode = data.gameMode || 'local'; activePlayers = data.activePlayers; finishedPlayers = data.finishedPlayers || []; if(data.playersInfoNames) data.playersInfoNames.forEach((n, i) => playersInfo[i].name = n); if(data.playersInfoBots) data.playersInfoBots.forEach((b, i) => playersInfo[i].isBot = b);
+                currentTurnIndex = data.currentTurnIndex; currentTurn = data.currentTurn; diceValue = data.diceValue; isRolled = data.isRolled; consecutiveSixes = data.consecutiveSixes || 0;
+                initBoard(); data.tokenStates.forEach((ts, idx) => { tokens[idx].state = ts.state; tokens[idx].pos = ts.pos; });
+                if (isRolled && !finishedPlayers.includes(currentTurn)) document.getElementById(`dice-${currentTurn}`).innerText = diceFaces[diceValue - 1];
+                document.getElementById('setup-screen').style.display = 'none'; document.getElementById('game-wrapper').style.display = 'flex';
+                activePlayers.forEach(id => { let pnl = document.getElementById(`panel-${id}`); pnl.classList.add('in-game'); if(finishedPlayers.includes(id)) pnl.classList.add('finished'); });
+                tokens.forEach(t => { if(activePlayers.includes(t.playerIndex)) t.el.classList.add('in-game'); });
+                playersInfo.forEach((p, idx) => { document.getElementById(`name-display-${idx}`).innerText = p.name; });
+                updateTurnUI(); setTimeout(updateTokensPosition, 100);
+            } else { initBoard(); }
+        }
+
+        function clearGameState() { if(confirm("Exit and start a new game?")) { localStorage.removeItem('ludo_master_state'); if (gameMode === 'online' && roomCode && myOnlineId === 0) db.ref('rooms/' + roomCode).remove(); location.reload(); } }
+        window.addEventListener('resize', updateTokensPosition); window.onload = loadGameState;
+    </script>
+</body>
+</html>
