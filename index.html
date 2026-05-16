@@ -206,7 +206,7 @@
     <div id="audio-container" style="display: none;"></div>
 
     <script>
-        const GAME_VERSION = "7.0"; // Final Sync Fix & WebRTC Voice Chat Integration
+        const GAME_VERSION = "7.1"; // CRITICAL BUG FIX: Engine isolation & Audio Unblock
         
         const firebaseConfig = {
             apiKey: "AIzaSyAKv2mbAUEMWRyx50zloBVy418UnLiiqBU",
@@ -248,7 +248,7 @@
 
         let myOnlineId = -1; let roomCode = null; let lastActionId = null;
 
-        // --- NEW: WEBRTC VOICE CHAT VARIABLES ---
+        // --- WEBRTC VOICE CHAT VARIABLES ---
         let peer = null; 
         let myAudioStream = null; 
         let isMicEnabled = false;
@@ -306,51 +306,63 @@
         function setAnimating(val) { isAnimating = val; if(!val) setTimeout(processNextAction, 50); }
         function setRolling(val) { isRolling = val; if(!val) setTimeout(processNextAction, 50); }
 
-        // --- NEW: WEBRTC VOICE CHAT LOGIC ---
+        // --- FIXED: ROBUST WEBRTC VOICE CHAT LOGIC ---
         function initVoiceChat() {
-            if(peer) return;
-            document.getElementById('mic-btn').style.display = 'flex';
-            
-            let myPeerId = "ludomaster-" + roomCode + "-" + myOnlineId + "-" + Math.floor(Math.random()*10000);
-            peer = new Peer(myPeerId);
-            
-            peer.on('open', (id) => {
-                db.ref(`rooms/${roomCode}/voice/${myOnlineId}`).set(id);
-                db.ref(`rooms/${roomCode}/voice/${myOnlineId}`).onDisconnect().remove();
-            });
+            try {
+                if(peer) return;
+                document.getElementById('mic-btn').style.display = 'flex';
+                
+                let myPeerId = "ludomaster-" + roomCode + "-" + myOnlineId + "-" + Math.floor(Math.random()*10000);
+                peer = new Peer(myPeerId);
+                
+                peer.on('open', (id) => {
+                    db.ref(`rooms/${roomCode}/voice/${myOnlineId}`).set(id);
+                    db.ref(`rooms/${roomCode}/voice/${myOnlineId}`).onDisconnect().remove();
+                });
 
-            peer.on('call', (call) => {
-                if (myAudioStream) { call.answer(myAudioStream); } else { call.answer(); }
-                handleCallStream(call);
-            });
+                peer.on('call', (call) => {
+                    if (myAudioStream) { call.answer(myAudioStream); } else { call.answer(); }
+                    handleCallStream(call);
+                });
+                
+                peer.on('error', (err) => { console.error("PeerJS Error handled securely:", err); });
 
-            db.ref(`rooms/${roomCode}/voice`).on('child_added', snapshot => {
-                let pId = snapshot.key; let peerStr = snapshot.val();
-                if (pId != myOnlineId) connectToPeer(peerStr);
-            });
-            
-            db.ref(`rooms/${roomCode}/voice`).on('child_changed', snapshot => {
-                let pId = snapshot.key; let peerStr = snapshot.val();
-                if (pId != myOnlineId) connectToPeer(peerStr);
-            });
+                db.ref(`rooms/${roomCode}/voice`).on('child_added', snapshot => {
+                    let pId = snapshot.key; let peerStr = snapshot.val();
+                    if (pId != myOnlineId) connectToPeer(peerStr);
+                });
+                
+                db.ref(`rooms/${roomCode}/voice`).on('child_changed', snapshot => {
+                    let pId = snapshot.key; let peerStr = snapshot.val();
+                    if (pId != myOnlineId) connectToPeer(peerStr);
+                });
+            } catch(e) {
+                console.error("Voice Engine failed to load, isolating core game loop.", e);
+            }
         }
 
         function connectToPeer(peerStr) {
-            if (!peer) return;
-            let call = myAudioStream ? peer.call(peerStr, myAudioStream) : peer.call(peerStr);
-            if(call) handleCallStream(call);
+            try {
+                if (!peer) return;
+                let call = myAudioStream ? peer.call(peerStr, myAudioStream) : peer.call(peerStr);
+                if(call) handleCallStream(call);
+            } catch(e) {}
         }
 
         function handleCallStream(call) {
             peerConnections[call.peer] = call;
             call.on('stream', (remoteStream) => {
-                if(!document.getElementById('audio-' + call.peer)) {
+                let aId = 'audio-' + call.peer;
+                if(!document.getElementById(aId)) {
                     let aud = document.createElement('audio');
-                    aud.id = 'audio-' + call.peer;
+                    aud.id = aId;
                     aud.srcObject = remoteStream;
                     aud.autoplay = true;
                     aud.setAttribute('playsinline', 'true'); 
                     document.getElementById('audio-container').appendChild(aud);
+                    // Explicit play bypasses iOS silent DOM restrictions
+                    let p = aud.play();
+                    if (p !== undefined) { p.catch(e => console.log('Mic playback restricted until interaction', e)); }
                 }
             });
             call.on('close', () => {
@@ -358,6 +370,7 @@
                 if(aud) aud.remove();
                 delete peerConnections[call.peer];
             });
+            call.on('error', (e) => {});
         }
 
         async function toggleMic() {
@@ -367,13 +380,15 @@
                     myAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                     isMicEnabled = true; btn.classList.remove('mic-off'); btn.innerText = '🎤';
                     
-                    // Broadcast new stream to all
-                    Object.values(peerConnections).forEach(c => c.close());
+                    // Restart connections to sync new stream
+                    Object.values(peerConnections).forEach(c => { try{ c.close(); }catch(e){} });
                     peerConnections = {};
                     db.ref(`rooms/${roomCode}/voice`).once('value', snapshot => {
-                        snapshot.forEach(child => { if (child.key != myOnlineId) connectToPeer(child.val()); });
+                        if(snapshot.exists()) {
+                            snapshot.forEach(child => { if (child.key != myOnlineId) connectToPeer(child.val()); });
+                        }
                     });
-                } catch(e) { alert("Microphone access denied! Please allow permissions."); }
+                } catch(e) { alert("Microphone access denied! Please allow permissions to voice chat."); }
             } else {
                 isMicEnabled = !isMicEnabled;
                 myAudioStream.getAudioTracks().forEach(track => track.enabled = isMicEnabled);
@@ -382,24 +397,49 @@
         }
 
         // --- ONLINE LOBBY CREATION ---
-        function createOnlineRoom() { roomCode = Math.floor(1000 + Math.random() * 9000).toString(); myOnlineId = 0; if(selectedPlayerCount === 2) activePlayers = [0, 2]; else if(selectedPlayerCount === 3) activePlayers = [0, 1, 2]; else activePlayers = [0, 1, 2, 3]; playersInfo[0].name = document.getElementById('input-0').value.trim() || "Host"; activePlayers.forEach(id => { if(id !== 0) playersInfo[id].name = "Waiting..."; }); startGame(true); saveGameState(); alert(`Your Room Code is: ${roomCode}\nShare this with up to ${selectedPlayerCount - 1} friends to let them join!`); initVoiceChat(); listenToRoom(); }
-        function joinOnlineRoom() { let code = prompt("Enter 4-digit Room Code to join:"); if(!code || code.length !== 4) return; roomCode = code; let myName = prompt("Enter Your Name:", "Player"); if(!myName) myName = "Friend"; db.ref('rooms/' + roomCode).once('value', snapshot => { let data = snapshot.val(); if(!data) { alert("Room not found!"); return; } gameMode = 'online'; activePlayers = data.state.activePlayers; selectedPlayerCount = activePlayers.length; let slotFound = -1; for(let id of activePlayers) { if(data.state.playersInfoNames[id] === "Waiting...") { slotFound = id; break; } } if(slotFound === -1) { alert("Room is already full!"); return; } myOnlineId = slotFound; playersInfo[myOnlineId].name = myName; db.ref(`rooms/${roomCode}/state/playersInfoNames/${myOnlineId}`).set(myName); startGame(true); initVoiceChat(); listenToRoom(); }); }
+        function createOnlineRoom() { 
+            roomCode = Math.floor(1000 + Math.random() * 9000).toString(); myOnlineId = 0; 
+            if(selectedPlayerCount === 2) activePlayers = [0, 2]; else if(selectedPlayerCount === 3) activePlayers = [0, 1, 2]; else activePlayers = [0, 1, 2, 3]; 
+            playersInfo[0].name = document.getElementById('input-0').value.trim() || "Host"; 
+            activePlayers.forEach(id => { if(id !== 0) playersInfo[id].name = "Waiting..."; }); 
+            startGame(true); saveGameState(); 
+            alert(`Your Room Code is: ${roomCode}\nShare this with up to ${selectedPlayerCount - 1} friends to let them join!`); 
+            
+            // FIX: listenToRoom initialized before Voice Engine to prevent total disconnection
+            listenToRoom(); 
+            initVoiceChat(); 
+        }
         
-        // --- NEW: FIREBASE ACTION SYNC GUARD ---
+        function joinOnlineRoom() { 
+            let code = prompt("Enter 4-digit Room Code to join:"); if(!code || code.length !== 4) return; roomCode = code; 
+            let myName = prompt("Enter Your Name:", "Player"); if(!myName) myName = "Friend"; 
+            db.ref('rooms/' + roomCode).once('value', snapshot => { 
+                let data = snapshot.val(); if(!data) { alert("Room not found!"); return; } 
+                gameMode = 'online'; activePlayers = data.state.activePlayers; selectedPlayerCount = activePlayers.length; 
+                let slotFound = -1; 
+                for(let id of activePlayers) { if(data.state.playersInfoNames[id] === "Waiting...") { slotFound = id; break; } } 
+                if(slotFound === -1) { alert("Room is already full!"); return; } 
+                myOnlineId = slotFound; playersInfo[myOnlineId].name = myName; 
+                db.ref(`rooms/${roomCode}/state/playersInfoNames/${myOnlineId}`).set(myName); 
+                startGame(true); 
+                
+                // FIX: Order of execution secured
+                listenToRoom(); 
+                initVoiceChat(); 
+            }); 
+        }
+        
         let isInitialActionSync = true;
         
         function listenToRoom() { 
             db.ref('rooms/' + roomCode + '/state').on('value', snapshot => { let data = snapshot.val(); if(data) { if(!isAnimating && !isRolling && actionQueue.length === 0) loadFromData(data); else pendingState = data; } }); 
             db.ref('rooms/' + roomCode + '/action').on('value', snapshot => { 
                 let action = snapshot.val(); 
-                
-                // Fix for the "Ghost Action Bug" causing token freezes!
                 if(isInitialActionSync) {
                     isInitialActionSync = false;
-                    if(action) lastActionId = action.id; // Record ID to prevent executing old move
+                    if(action) lastActionId = action.id; 
                     return; 
                 }
-                
                 if(action && action.id !== lastActionId) { lastActionId = action.id; actionQueue.push(action); processNextAction(); } 
             }); 
         }
@@ -521,7 +561,6 @@
                     }
                     setTimeout(() => tokenClicked(bestToken, true), 700);
                 } else {
-                    // NEW: Prevents BOTH host and client sending Auto-Move simultaneous to Firebase
                     if(gameMode !== 'online' || myOnlineId === currentTurn) {
                         if (validTokens.length === 1) { setTimeout(() => tokenClicked(validTokens[0], true), 350); } else { validTokens.forEach(t => t.el.classList.add('highlight')); }
                     }
