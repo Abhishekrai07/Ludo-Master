@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Ludo Master - Realistic 3D Dice</title>
+    <title>Ludo Master - Online Voice Chat & 3D Dice</title>
     
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
@@ -109,7 +109,6 @@
 </head>
 <body>
 
-    <!-- AUTOPLAY GUARD OVERLAY: Shown on refresh when bot/game needs user interaction first -->
     <div id="resume-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.92); z-index:5000; justify-content:center; align-items:center; flex-direction:column; backdrop-filter:blur(8px);" onclick="continueFromLoad()">
         <div style="text-align:center; padding:30px; background:#1e293b; border-radius:20px; border:2px solid #00A8F3; box-shadow:0 0 40px rgba(0,168,243,0.6); max-width:320px; animation:popIn 0.4s ease;">
             <div style="font-size:48px; margin-bottom:10px;">🎲</div>
@@ -207,7 +206,7 @@
     <div id="audio-container" style="display: none;"></div>
 
     <script>
-        const GAME_VERSION = "6.3"; // Fix v6.3: Bot/Online turn freeze — setAnimating(false) now called BEFORE nextTurn()
+        const GAME_VERSION = "7.0"; // Final Sync Fix & WebRTC Voice Chat Integration
         
         const firebaseConfig = {
             apiKey: "AIzaSyAKv2mbAUEMWRyx50zloBVy418UnLiiqBU",
@@ -236,25 +235,24 @@
         let gameMode = 'local'; let selectedPlayerCount = 4; let activePlayers = []; let finishedPlayers = []; 
         let currentTurnIndex = 0; let currentTurn = 0; let diceValue = 0; let isRolled = false; 
         
-        let isAnimating = false; 
-        let isRolling = false; 
-        let isActionPending = false;
-        let actionQueue = [];
-        let pendingState = null;
+        let isAnimating = false; let isRolling = false; let isActionPending = false;
+        let actionQueue = []; let pendingState = null;
         
-        // --- AUDIO & INTERACTION GUARD ---
-        // Fixes: "Refresh par Sound Block" & "Refresh par Bot ka Auto-Play"
-        let userHasInteracted = false;      // True only after first real user touch/click
-        let waitingForFirstInteraction = false; // True when game loaded from save, blocking bot auto-play
-        let botTurnTimeout = null;          // Ref to clear stale bot-play timeouts
+        let userHasInteracted = false;     
+        let waitingForFirstInteraction = false; 
+        let botTurnTimeout = null;          
         
         let consecutiveSixes = 0; let tokens = [];
         let diceBags = [[], [], [], []]; 
-        
         let boardMetrics = { w: 0, h: 0 }; 
 
         let myOnlineId = -1; let roomCode = null; let lastActionId = null;
-        let peer = null; let myAudioStream = null; let isMicEnabled = true;
+
+        // --- NEW: WEBRTC VOICE CHAT VARIABLES ---
+        let peer = null; 
+        let myAudioStream = null; 
+        let isMicEnabled = false;
+        let peerConnections = {};
 
         let playersInfo = [
             { id: 0, color: 'blue', hex: '#00A8F3', startIndex: 0, name: 'PhantomGaze', isBot: false },
@@ -263,21 +261,9 @@
             { id: 3, color: 'yellow', hex: '#FFF200', startIndex: 39, name: 'Yellow', isBot: false }
         ];
 
-        const pathMap = [
-            [7,2],[7,3],[7,4],[7,5],[7,6], [6,7],[5,7],[4,7],[3,7],[2,7],[1,7],
-            [1,8],[1,9], [2,9],[3,9],[4,9],[5,9],[6,9], [7,10],[7,11],[7,12],[7,13],[7,14],[7,15],
-            [8,15],[9,15], [9,14],[9,13],[9,12],[9,11],[9,10], [10,9],[11,9],[12,9],[13,9],[14,9],[15,9],
-            [15,8],[15,7], [14,7],[13,7],[12,7],[11,7],[10,7], [9,6],[9,5],[9,4],[9,3],[9,2],[9,1],
-            [8,1],[7,1]
-        ];
-        const homeStretchMap = {
-            blue: [[8,2], [8,3], [8,4], [8,5], [8,6], [8,7]], red: [[2,8], [3,8], [4,8], [5,8], [6,8], [7,8]],
-            green: [[8,14], [8,13], [8,12], [8,11], [8,10], [8,9]], yellow: [[14,8], [13,8], [12,8], [11,8], [10,8], [9,8]]
-        };
-        const baseMap = {
-            blue: [[2.5, 2.5], [2.5, 4.5], [4.5, 2.5], [4.5, 4.5]], red: [[2.5, 11.5], [2.5, 13.5], [4.5, 11.5], [4.5, 13.5]],
-            green: [[11.5, 11.5], [11.5, 13.5], [13.5, 11.5], [13.5, 13.5]], yellow: [[11.5, 2.5], [11.5, 4.5], [13.5, 2.5], [13.5, 4.5]]
-        };
+        const pathMap = [ [7,2],[7,3],[7,4],[7,5],[7,6], [6,7],[5,7],[4,7],[3,7],[2,7],[1,7], [1,8],[1,9], [2,9],[3,9],[4,9],[5,9],[6,9], [7,10],[7,11],[7,12],[7,13],[7,14],[7,15], [8,15],[9,15], [9,14],[9,13],[9,12],[9,11],[9,10], [10,9],[11,9],[12,9],[13,9],[14,9],[15,9], [15,8],[15,7], [14,7],[13,7],[12,7],[11,7],[10,7], [9,6],[9,5],[9,4],[9,3],[9,2],[9,1], [8,1],[7,1] ];
+        const homeStretchMap = { blue: [[8,2], [8,3], [8,4], [8,5], [8,6], [8,7]], red: [[2,8], [3,8], [4,8], [5,8], [6,8], [7,8]], green: [[8,14], [8,13], [8,12], [8,11], [8,10], [8,9]], yellow: [[14,8], [13,8], [12,8], [11,8], [10,8], [9,8]] };
+        const baseMap = { blue: [[2.5, 2.5], [2.5, 4.5], [4.5, 2.5], [4.5, 4.5]], red: [[2.5, 11.5], [2.5, 13.5], [4.5, 11.5], [4.5, 13.5]], green: [[11.5, 11.5], [11.5, 13.5], [13.5, 11.5], [13.5, 13.5]], yellow: [[11.5, 2.5], [11.5, 4.5], [13.5, 2.5], [13.5, 4.5]] };
 
         function toggleMute() { isMuted = !isMuted; localStorage.setItem('ludo_muted', isMuted); document.getElementById('mute-btn').innerText = isMuted ? '🔇' : '🔊'; }
         function toggleVibrate() { isVibrateEnabled = !isVibrateEnabled; localStorage.setItem('ludo_vibrate', isVibrateEnabled); document.getElementById('vibrate-btn').innerText = isVibrateEnabled ? '📳' : '📴'; if (isVibrateEnabled) triggerHaptic(50); }
@@ -288,7 +274,8 @@
             if (!isMuted && userHasInteracted) { 
                 audioObj.pause(); 
                 audioObj.currentTime = 0; 
-                audioObj.play().catch(e => {}); 
+                let p = audioObj.play();
+                if(p !== undefined) p.catch(()=>{});
             } 
         }
         
@@ -298,324 +285,129 @@
         document.getElementById('vibrate-btn').innerText = isVibrateEnabled ? '📳' : '📴';
         updateDiceToggleUI();
         
-        function cacheBoardSize() {
-            let boardEl = document.getElementById('board');
-            if(boardEl) {
-                boardMetrics.w = boardEl.clientWidth;
-                boardMetrics.h = boardEl.clientHeight;
-            }
-        }
+        function cacheBoardSize() { let boardEl = document.getElementById('board'); if(boardEl) { boardMetrics.w = boardEl.clientWidth; boardMetrics.h = boardEl.clientHeight; } }
 
-        function showModal(title, bodyHtml, colorHex, showButton = false) {
-            document.getElementById('modal-title').innerText = title; document.getElementById('modal-title').style.color = colorHex;
-            document.getElementById('modal-body').innerHTML = bodyHtml; document.getElementById('modal-box').style.borderColor = colorHex;
-            document.getElementById('modal-btn').style.display = showButton ? 'inline-block' : 'none'; document.getElementById('game-modal').style.display = 'flex';
-        }
+        function showModal(title, bodyHtml, colorHex, showButton = false) { document.getElementById('modal-title').innerText = title; document.getElementById('modal-title').style.color = colorHex; document.getElementById('modal-body').innerHTML = bodyHtml; document.getElementById('modal-box').style.borderColor = colorHex; document.getElementById('modal-btn').style.display = showButton ? 'inline-block' : 'none'; document.getElementById('game-modal').style.display = 'flex'; }
         function closeModal() { document.getElementById('game-modal').style.display = 'none'; }
 
-        function selectGameMode(mode, btnElement) {
-            gameMode = mode; document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('selected')); btnElement.classList.add('selected');
-            if(mode === 'online') {
-                document.getElementById('start-btn').style.display = 'none'; document.getElementById('online-actions').style.display = 'flex';
-                for(let i=1; i<=3; i++) { document.getElementById(`input-${i}`).disabled = false; playersInfo[i].isBot = false; }
-            } else {
-                document.getElementById('start-btn').style.display = 'block'; document.getElementById('online-actions').style.display = 'none';
-                for(let i=1; i<=3; i++) { let inp = document.getElementById(`input-${i}`); if (mode === 'bot') { inp.disabled = true; inp.value = `Computer ${i}`; playersInfo[i].isBot = true; } else { inp.disabled = false; inp.value = playersInfo[i].color.charAt(0).toUpperCase() + playersInfo[i].color.slice(1); playersInfo[i].isBot = false; } }
-            }
-        }
-
-        function selectPlayers(count, btnElement) {
-            selectedPlayerCount = count; document.querySelectorAll('.player-btn').forEach(btn => btn.classList.remove('selected')); btnElement.classList.add('selected');
-            document.getElementById('input-2').style.display = count >= 3 ? 'block' : 'none'; document.getElementById('input-3').style.display = count === 4 ? 'block' : 'none';
-        }
+        function selectGameMode(mode, btnElement) { gameMode = mode; document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('selected')); btnElement.classList.add('selected'); if(mode === 'online') { document.getElementById('start-btn').style.display = 'none'; document.getElementById('online-actions').style.display = 'flex'; for(let i=1; i<=3; i++) { document.getElementById(`input-${i}`).disabled = false; playersInfo[i].isBot = false; } } else { document.getElementById('start-btn').style.display = 'block'; document.getElementById('online-actions').style.display = 'none'; for(let i=1; i<=3; i++) { let inp = document.getElementById(`input-${i}`); if (mode === 'bot') { inp.disabled = true; inp.value = `Computer ${i}`; playersInfo[i].isBot = true; } else { inp.disabled = false; inp.value = playersInfo[i].color.charAt(0).toUpperCase() + playersInfo[i].color.slice(1); playersInfo[i].isBot = false; } } } }
+        function selectPlayers(count, btnElement) { selectedPlayerCount = count; document.querySelectorAll('.player-btn').forEach(btn => btn.classList.remove('selected')); btnElement.classList.add('selected'); document.getElementById('input-2').style.display = count >= 3 ? 'block' : 'none'; document.getElementById('input-3').style.display = count === 4 ? 'block' : 'none'; }
 
         // --- 3D DICE ENGINE ---
-        let diceScene, diceCamera, diceRenderer, diceClock;
-        let dice3D;
-        let isDiceRolling3D = false;
-        let isDiceSettling = false;
-        let targetQuaternion = new THREE.Quaternion();
-        let diceVelocity = new THREE.Vector3();
-        let diceAngularVelocity = new THREE.Vector3();
-        let targetDiceResult = 1;
-        let diceRollCallback = null;
-        let diceBounces = 0;
+        let diceScene, diceCamera, diceRenderer, diceClock; let dice3D; let isDiceRolling3D = false; let isDiceSettling = false; let targetQuaternion = new THREE.Quaternion(); let diceVelocity = new THREE.Vector3(); let diceAngularVelocity = new THREE.Vector3(); let targetDiceResult = 1; let diceRollCallback = null; let diceBounces = 0;
+        function createDiceTextures() { const materials = []; const dotCoords = [ [], [[64,64]], [[32,32], [96,96]], [[32,32], [64,64], [96,96]], [[32,32], [32,96], [96,32], [96,96]], [[32,32], [32,96], [64,64], [96,32], [96,96]], [[32,32], [32,64], [32,96], [96,32], [96,64], [96,96]] ]; for(let i=1; i<=6; i++) { const canvas = document.createElement('canvas'); canvas.width = 128; canvas.height = 128; const ctx = canvas.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,128,128); ctx.fillStyle = '#000000'; dotCoords[i].forEach(coord => { ctx.beginPath(); ctx.arc(coord[0], coord[1], 14, 0, Math.PI*2); ctx.fill(); }); const tex = new THREE.CanvasTexture(canvas); materials.push(new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0.0 })); } return [materials[0], materials[5], materials[1], materials[4], materials[2], materials[3]]; }
+        function init3DDiceEngine() { if (diceRenderer) return; const diceCanvas = document.getElementById('dice-canvas'); const wrapper = document.getElementById('game-wrapper'); const rect = wrapper.getBoundingClientRect(); diceRenderer = new THREE.WebGLRenderer({ canvas: diceCanvas, antialias: true, alpha: true }); diceRenderer.setSize(rect.width, rect.height); diceRenderer.setPixelRatio(window.devicePixelRatio); diceScene = new THREE.Scene(); diceClock = new THREE.Clock(); const frustumSize = 30; diceCamera = new THREE.OrthographicCamera(frustumSize / -2, frustumSize / 2, frustumSize / 2, frustumSize / -2, 1, 1000); diceCamera.position.set(0, 50, 0); diceCamera.lookAt(0, 0, 0); diceScene.add(new THREE.AmbientLight(0xffffff, 0.9)); const diceLight = new THREE.DirectionalLight(0xffffff, 0.4); diceLight.position.set(5, 20, 10); diceScene.add(diceLight); const diceGeo = new THREE.RoundedBoxGeometry(2.25, 2.25, 2.25, 4, 0.25); dice3D = new THREE.Mesh(diceGeo, createDiceTextures()); dice3D.visible = false; diceScene.add(dice3D); window.addEventListener('resize', () => { const rect = wrapper.getBoundingClientRect(); diceRenderer.setSize(rect.width, rect.height); }); animate3DDice(); }
+        function getDiceStartPos(playerIndex) { const diceEl = document.getElementById(`dice-${playerIndex}`); const rect = diceEl.getBoundingClientRect(); const wrapper = document.getElementById('game-wrapper').getBoundingClientRect(); const centerX = rect.left + rect.width / 2 - wrapper.left; const centerY = rect.top + rect.height / 2 - wrapper.top; const ndcX = (centerX / wrapper.width) * 2 - 1; const ndcY = -(centerY / wrapper.height) * 2 + 1; return { x: ndcX * 15, z: -ndcY * 15 }; }
+        function launch3DDice(result, playerIndex, callback) { dice3D.visible = true; isDiceSettling = false; let pos = getDiceStartPos(playerIndex); pos.x = Math.max(-12.5, Math.min(12.5, pos.x)); pos.z = Math.max(-12.5, Math.min(12.5, pos.z)); dice3D.position.set(pos.x, 8, pos.z); dice3D.quaternion.set(0,0,0,1); let velX = (0 - pos.x) * 0.45 + (Math.random() * 3 - 1.5); let velZ = (0 - pos.z) * 0.45 + (Math.random() * 3 - 1.5); diceVelocity.set(velX, 7, velZ); diceAngularVelocity.set(Math.random()*8+4, Math.random()*8+4, Math.random()*8+4); targetDiceResult = result; diceRollCallback = callback; diceBounces = 0; isDiceRolling3D = true; clearTimeout(window.diceFailsafe); window.diceFailsafe = setTimeout(() => { if(isDiceRolling3D || isDiceSettling) { isDiceRolling3D = false; isDiceSettling = false; dice3D.visible = false; if(diceRollCallback) { diceRollCallback(); diceRollCallback = null; } } }, 2500); }
+        function animate3DDice() { requestAnimationFrame(animate3DDice); const delta = Math.min(diceClock.getDelta(), 0.05); if(!isDiceRolling3D && !isDiceSettling) { if (dice3D && dice3D.visible) { dice3D.visible = false; diceRenderer.render(diceScene, diceCamera); } return; } if(isDiceRolling3D) { diceVelocity.y -= 25 * delta; dice3D.position.addScaledVector(diceVelocity, delta); diceVelocity.x -= diceVelocity.x * 0.15 * delta; diceVelocity.z -= diceVelocity.z * 0.15 * delta; dice3D.rotation.x += diceAngularVelocity.x * delta; dice3D.rotation.y += diceAngularVelocity.y * delta; dice3D.rotation.z += diceAngularVelocity.z * delta; const boardLimit = 13; if(dice3D.position.x > boardLimit && diceVelocity.x > 0) { dice3D.position.x = boardLimit; diceVelocity.x *= -0.6; diceAngularVelocity.z *= -0.4; } if(dice3D.position.x < -boardLimit && diceVelocity.x < 0) { dice3D.position.x = -boardLimit; diceVelocity.x *= -0.6; diceAngularVelocity.z *= -0.4; } if(dice3D.position.z > boardLimit && diceVelocity.z > 0) { dice3D.position.z = boardLimit; diceVelocity.z *= -0.6; diceAngularVelocity.x *= -0.4; } if(dice3D.position.z < -boardLimit && diceVelocity.z < 0) { dice3D.position.z = -boardLimit; diceVelocity.z *= -0.6; diceAngularVelocity.x *= -0.4; } if (dice3D.position.y < 1.15) { dice3D.position.y = 1.15; diceVelocity.y *= -0.5; diceVelocity.x *= 0.85; diceVelocity.z *= 0.85; diceBounces++; diceAngularVelocity.x += (Math.random()-0.5)*2; diceAngularVelocity.z += (Math.random()-0.5)*2; diceAngularVelocity.multiplyScalar(0.7); if (Math.abs(diceVelocity.y) < 0.5 && diceBounces > 2 && Math.abs(diceVelocity.x) < 0.5 && Math.abs(diceVelocity.z) < 0.5) { isDiceRolling3D = false; let baseEuler = new THREE.Euler(0,0,0); switch(targetDiceResult) { case 1: baseEuler.z = Math.PI/2; break; case 6: baseEuler.z = -Math.PI/2; break; case 2: baseEuler.set(0,0,0); break; case 5: baseEuler.x = Math.PI; break; case 3: baseEuler.x = -Math.PI/2; break; case 4: baseEuler.x = Math.PI/2; break; } let finalQuat = new THREE.Quaternion().setFromEuler(baseEuler); let randomY = (Math.random() - 0.5) * (Math.PI / 4); let yQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), randomY); finalQuat.premultiply(yQuat); targetQuaternion.copy(finalQuat); isDiceSettling = true; } } } else if (isDiceSettling) { dice3D.quaternion.slerp(targetQuaternion, 0.2); dice3D.position.y += (1.125 - dice3D.position.y) * 0.2; diceVelocity.x *= 0.5; diceVelocity.z *= 0.5; dice3D.position.x += diceVelocity.x * delta; dice3D.position.z += diceVelocity.z * delta; if (dice3D.quaternion.angleTo(targetQuaternion) < 0.05) { isDiceSettling = false; clearTimeout(window.diceFailsafe); setTimeout(() => { dice3D.visible = false; if(diceRollCallback) { diceRollCallback(); diceRollCallback = null; } }, 400); } } diceRenderer.render(diceScene, diceCamera); }
 
-        function createDiceTextures() {
-            const materials = [];
-            const dotCoords = [ [], [[64,64]], [[32,32], [96,96]], [[32,32], [64,64], [96,96]], [[32,32], [32,96], [96,32], [96,96]], [[32,32], [32,96], [64,64], [96,32], [96,96]], [[32,32], [32,64], [32,96], [96,32], [96,64], [96,96]] ];
-            for(let i=1; i<=6; i++) {
-                const canvas = document.createElement('canvas'); canvas.width = 128; canvas.height = 128;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,128,128); 
-                ctx.fillStyle = '#000000'; 
-                dotCoords[i].forEach(coord => { ctx.beginPath(); ctx.arc(coord[0], coord[1], 14, 0, Math.PI*2); ctx.fill(); });
-                const tex = new THREE.CanvasTexture(canvas);
-                materials.push(new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0.0 }));
-            }
-            return [materials[0], materials[5], materials[1], materials[4], materials[2], materials[3]];
-        }
-
-        function init3DDiceEngine() {
-            if (diceRenderer) return; 
-            
-            const diceCanvas = document.getElementById('dice-canvas');
-            const wrapper = document.getElementById('game-wrapper');
-            const rect = wrapper.getBoundingClientRect();
-            
-            diceRenderer = new THREE.WebGLRenderer({ canvas: diceCanvas, antialias: true, alpha: true });
-            diceRenderer.setSize(rect.width, rect.height); diceRenderer.setPixelRatio(window.devicePixelRatio);
-
-            diceScene = new THREE.Scene(); diceClock = new THREE.Clock();
-            
-            const frustumSize = 30; 
-            diceCamera = new THREE.OrthographicCamera(frustumSize / -2, frustumSize / 2, frustumSize / 2, frustumSize / -2, 1, 1000);
-            diceCamera.position.set(0, 50, 0); diceCamera.lookAt(0, 0, 0);
-
-            diceScene.add(new THREE.AmbientLight(0xffffff, 0.9));
-            const diceLight = new THREE.DirectionalLight(0xffffff, 0.4);
-            diceLight.position.set(5, 20, 10); 
-            diceScene.add(diceLight);
-
-            const diceGeo = new THREE.RoundedBoxGeometry(2.25, 2.25, 2.25, 4, 0.25);
-            dice3D = new THREE.Mesh(diceGeo, createDiceTextures());
-            dice3D.visible = false; diceScene.add(dice3D);
-
-            window.addEventListener('resize', () => { 
-                const rect = wrapper.getBoundingClientRect(); 
-                diceRenderer.setSize(rect.width, rect.height); 
-            });
-            animate3DDice();
-        }
-
-        function getDiceStartPos(playerIndex) {
-            const diceEl = document.getElementById(`dice-${playerIndex}`);
-            const rect = diceEl.getBoundingClientRect();
-            const wrapper = document.getElementById('game-wrapper').getBoundingClientRect();
-            const centerX = rect.left + rect.width / 2 - wrapper.left;
-            const centerY = rect.top + rect.height / 2 - wrapper.top;
-            const ndcX = (centerX / wrapper.width) * 2 - 1;
-            const ndcY = -(centerY / wrapper.height) * 2 + 1;
-            return { x: ndcX * 15, z: -ndcY * 15 };
-        }
-
-        function launch3DDice(result, playerIndex, callback) {
-            dice3D.visible = true;
-            isDiceSettling = false;
-            let pos = getDiceStartPos(playerIndex);
-            
-            pos.x = Math.max(-12.5, Math.min(12.5, pos.x));
-            pos.z = Math.max(-12.5, Math.min(12.5, pos.z));
-
-            dice3D.position.set(pos.x, 8, pos.z); 
-            dice3D.quaternion.set(0,0,0,1);
-            
-            let velX = (0 - pos.x) * 0.45 + (Math.random() * 3 - 1.5);
-            let velZ = (0 - pos.z) * 0.45 + (Math.random() * 3 - 1.5);
-            
-            diceVelocity.set(velX, 7, velZ); 
-            diceAngularVelocity.set(Math.random()*8+4, Math.random()*8+4, Math.random()*8+4); 
-            
-            targetDiceResult = result; diceRollCallback = callback; diceBounces = 0; isDiceRolling3D = true;
-
-            clearTimeout(window.diceFailsafe);
-            window.diceFailsafe = setTimeout(() => {
-                if(isDiceRolling3D || isDiceSettling) {
-                    isDiceRolling3D = false;
-                    isDiceSettling = false;
-                    dice3D.visible = false;
-                    if(diceRollCallback) {
-                        diceRollCallback();
-                        diceRollCallback = null;
-                    }
-                }
-            }, 2500); 
-        }
-
-        function animate3DDice() {
-            requestAnimationFrame(animate3DDice);
-            
-            // FIX: Cap delta to max 50ms to prevent physics explosion after tab switch / lag spikes
-            const rawDelta = diceClock.getDelta();
-            const delta = Math.min(rawDelta, 0.05);
-            
-            if(!isDiceRolling3D && !isDiceSettling) {
-                if (dice3D && dice3D.visible) {
-                    dice3D.visible = false;
-                    diceRenderer.render(diceScene, diceCamera);
-                }
-                return; 
-            }
-            
-            if(isDiceRolling3D) {
-                diceVelocity.y -= 25 * delta; 
-                dice3D.position.addScaledVector(diceVelocity, delta);
-                
-                diceVelocity.x -= diceVelocity.x * 0.15 * delta;
-                diceVelocity.z -= diceVelocity.z * 0.15 * delta;
-
-                dice3D.rotation.x += diceAngularVelocity.x * delta;
-                dice3D.rotation.y += diceAngularVelocity.y * delta;
-                dice3D.rotation.z += diceAngularVelocity.z * delta;
-
-                const boardLimit = 13; 
-                if(dice3D.position.x > boardLimit && diceVelocity.x > 0) { dice3D.position.x = boardLimit; diceVelocity.x *= -0.6; diceAngularVelocity.z *= -0.4; }
-                if(dice3D.position.x < -boardLimit && diceVelocity.x < 0) { dice3D.position.x = -boardLimit; diceVelocity.x *= -0.6; diceAngularVelocity.z *= -0.4; }
-                if(dice3D.position.z > boardLimit && diceVelocity.z > 0) { dice3D.position.z = boardLimit; diceVelocity.z *= -0.6; diceAngularVelocity.x *= -0.4; }
-                if(dice3D.position.z < -boardLimit && diceVelocity.z < 0) { dice3D.position.z = -boardLimit; diceVelocity.z *= -0.6; diceAngularVelocity.x *= -0.4; }
-
-                if (dice3D.position.y < 1.15) {
-                    dice3D.position.y = 1.15; 
-                    diceVelocity.y *= -0.5; 
-                    diceVelocity.x *= 0.85; 
-                    diceVelocity.z *= 0.85; 
-                    diceBounces++;
-                    
-                    diceAngularVelocity.x += (Math.random()-0.5)*2;
-                    diceAngularVelocity.z += (Math.random()-0.5)*2;
-                    diceAngularVelocity.multiplyScalar(0.7); 
-
-                    if (Math.abs(diceVelocity.y) < 0.5 && diceBounces > 2 && Math.abs(diceVelocity.x) < 0.5 && Math.abs(diceVelocity.z) < 0.5) {
-                        isDiceRolling3D = false; 
-                        
-                        let baseEuler = new THREE.Euler(0,0,0);
-                        switch(targetDiceResult) {
-                            case 1: baseEuler.z = Math.PI/2; break; 
-                            case 6: baseEuler.z = -Math.PI/2; break; 
-                            case 2: baseEuler.set(0,0,0); break; 
-                            case 5: baseEuler.x = Math.PI; break; 
-                            case 3: baseEuler.x = -Math.PI/2; break; 
-                            case 4: baseEuler.x = Math.PI/2; break; 
-                        }
-                        
-                        let finalQuat = new THREE.Quaternion().setFromEuler(baseEuler);
-                        let randomY = (Math.random() - 0.5) * (Math.PI / 4);
-                        let yQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), randomY);
-                        
-                        finalQuat.premultiply(yQuat); 
-                        targetQuaternion.copy(finalQuat);
-                        
-                        isDiceSettling = true;
-                    }
-                }
-            } else if (isDiceSettling) {
-                dice3D.quaternion.slerp(targetQuaternion, 0.2);
-                dice3D.position.y += (1.125 - dice3D.position.y) * 0.2; 
-                
-                diceVelocity.x *= 0.5;
-                diceVelocity.z *= 0.5;
-                dice3D.position.x += diceVelocity.x * delta;
-                dice3D.position.z += diceVelocity.z * delta;
-
-                if (dice3D.quaternion.angleTo(targetQuaternion) < 0.05) {
-                    isDiceSettling = false;
-                    clearTimeout(window.diceFailsafe);
-                    setTimeout(() => {
-                        dice3D.visible = false;
-                        if(diceRollCallback) { 
-                            diceRollCallback(); 
-                            diceRollCallback = null; 
-                        }
-                    }, 400); 
-                }
-            }
-            diceRenderer.render(diceScene, diceCamera);
-        }
-
-        // --- GAME QUEUE & LOGIC ---
-        function checkPendingState() {
-            if (pendingState && !isAnimating && !isRolling && actionQueue.length === 0) {
-                let data = pendingState; pendingState = null; loadFromData(data);
-            }
-        }
-
-        function processNextAction() {
-            if (isRolling || isAnimating) return; 
-            if (actionQueue.length === 0) { checkPendingState(); return; }
-            
-            let action = actionQueue.shift();
-            
-            if (action.type === 'ROLL') {
-                isRolling = true; 
-                isActionPending = false; 
-                executeRoll(action.by, action.result);
-            } else if (action.type === 'MOVE') {
-                isAnimating = true; 
-                isActionPending = false; 
-                let t = tokens.find(tok => tok.color === action.color && tok.id === action.tokenId); 
-                if(t) executeMove(t); else setAnimating(false);
-            }
-        }
-
+        function checkPendingState() { if (pendingState && !isAnimating && !isRolling && actionQueue.length === 0) { let data = pendingState; pendingState = null; loadFromData(data); } }
+        function processNextAction() { if (isRolling || isAnimating) return; if (actionQueue.length === 0) { checkPendingState(); return; } let action = actionQueue.shift(); if (action.type === 'ROLL') { isRolling = true; isActionPending = false; executeRoll(action.by, action.result); } else if (action.type === 'MOVE') { isAnimating = true; isActionPending = false; let t = tokens.find(tok => tok.color === action.color && tok.id === action.tokenId); if(t) executeMove(t); else setAnimating(false); } }
         function setAnimating(val) { isAnimating = val; if(!val) setTimeout(processNextAction, 50); }
         function setRolling(val) { isRolling = val; if(!val) setTimeout(processNextAction, 50); }
 
-        function createOnlineRoom() {
-            roomCode = Math.floor(1000 + Math.random() * 9000).toString(); myOnlineId = 0; 
-            if(selectedPlayerCount === 2) activePlayers = [0, 2]; else if(selectedPlayerCount === 3) activePlayers = [0, 1, 2]; else activePlayers = [0, 1, 2, 3]; 
-            playersInfo[0].name = document.getElementById('input-0').value.trim() || "Host";
-            activePlayers.forEach(id => { if(id !== 0) playersInfo[id].name = "Waiting..."; });
-            startGame(true); saveGameState(); 
-            alert(`Your Room Code is: ${roomCode}\nShare this with up to ${selectedPlayerCount - 1} friends to let them join!`);
-            listenToRoom(); 
-        }
+        // --- NEW: WEBRTC VOICE CHAT LOGIC ---
+        function initVoiceChat() {
+            if(peer) return;
+            document.getElementById('mic-btn').style.display = 'flex';
+            
+            let myPeerId = "ludomaster-" + roomCode + "-" + myOnlineId + "-" + Math.floor(Math.random()*10000);
+            peer = new Peer(myPeerId);
+            
+            peer.on('open', (id) => {
+                db.ref(`rooms/${roomCode}/voice/${myOnlineId}`).set(id);
+                db.ref(`rooms/${roomCode}/voice/${myOnlineId}`).onDisconnect().remove();
+            });
 
-        function joinOnlineRoom() {
-            let code = prompt("Enter 4-digit Room Code to join:"); if(!code || code.length !== 4) return; roomCode = code;
-            let myName = prompt("Enter Your Name:", "Player"); if(!myName) myName = "Friend";
-            db.ref('rooms/' + roomCode).once('value', snapshot => {
-                let data = snapshot.val(); if(!data) { alert("Room not found!"); return; }
-                gameMode = 'online'; activePlayers = data.state.activePlayers; selectedPlayerCount = activePlayers.length;
-                let slotFound = -1;
-                for(let id of activePlayers) { if(data.state.playersInfoNames[id] === "Waiting...") { slotFound = id; break; } }
-                if(slotFound === -1) { alert("Room is already full!"); return; }
-                myOnlineId = slotFound; playersInfo[myOnlineId].name = myName;
-                db.ref(`rooms/${roomCode}/state/playersInfoNames/${myOnlineId}`).set(myName);
-                startGame(true); listenToRoom(); 
+            peer.on('call', (call) => {
+                if (myAudioStream) { call.answer(myAudioStream); } else { call.answer(); }
+                handleCallStream(call);
+            });
+
+            db.ref(`rooms/${roomCode}/voice`).on('child_added', snapshot => {
+                let pId = snapshot.key; let peerStr = snapshot.val();
+                if (pId != myOnlineId) connectToPeer(peerStr);
+            });
+            
+            db.ref(`rooms/${roomCode}/voice`).on('child_changed', snapshot => {
+                let pId = snapshot.key; let peerStr = snapshot.val();
+                if (pId != myOnlineId) connectToPeer(peerStr);
             });
         }
 
-        function listenToRoom() {
-            db.ref('rooms/' + roomCode + '/state').on('value', snapshot => { 
-                let data = snapshot.val(); 
-                if(data) { if(!isAnimating && !isRolling && actionQueue.length === 0) loadFromData(data); else pendingState = data; }
+        function connectToPeer(peerStr) {
+            if (!peer) return;
+            let call = myAudioStream ? peer.call(peerStr, myAudioStream) : peer.call(peerStr);
+            if(call) handleCallStream(call);
+        }
+
+        function handleCallStream(call) {
+            peerConnections[call.peer] = call;
+            call.on('stream', (remoteStream) => {
+                if(!document.getElementById('audio-' + call.peer)) {
+                    let aud = document.createElement('audio');
+                    aud.id = 'audio-' + call.peer;
+                    aud.srcObject = remoteStream;
+                    aud.autoplay = true;
+                    aud.setAttribute('playsinline', 'true'); 
+                    document.getElementById('audio-container').appendChild(aud);
+                }
             });
-            db.ref('rooms/' + roomCode + '/action').on('value', snapshot => {
-                let action = snapshot.val();
-                if(action && action.id !== lastActionId) { lastActionId = action.id; actionQueue.push(action); processNextAction(); }
+            call.on('close', () => {
+                let aud = document.getElementById('audio-' + call.peer);
+                if(aud) aud.remove();
+                delete peerConnections[call.peer];
             });
         }
 
-        function loadFromData(data) {
-            gameMode = data.gameMode || 'online'; activePlayers = data.activePlayers; finishedPlayers = data.finishedPlayers || [];
-            if(data.playersInfoNames) data.playersInfoNames.forEach((n, i) => playersInfo[i].name = n);
-            currentTurnIndex = data.currentTurnIndex; currentTurn = data.currentTurn; diceValue = data.diceValue; isRolled = data.isRolled; consecutiveSixes = data.consecutiveSixes || 0;
-            diceBags = data.diceBags || [[], [], [], []];
-            
-            document.getElementById('setup-screen').style.display = 'none'; document.getElementById('game-wrapper').style.display = 'flex';
-            if(tokens.length === 0) initBoard(); 
-            
-            data.tokenStates.forEach((ts, idx) => { tokens[idx].state = ts.state; tokens[idx].pos = ts.pos; });
-            if (isRolled && !finishedPlayers.includes(currentTurn)) document.getElementById(`dice-${currentTurn}`).innerText = diceFaces[diceValue - 1] || '🎲'; else document.getElementById(`dice-${currentTurn}`).innerText = '🎲';
-
-            activePlayers.forEach(id => { let pnl = document.getElementById(`panel-${id}`); pnl.classList.add('in-game'); if(finishedPlayers.includes(id)) pnl.classList.add('finished'); });
-            tokens.forEach(t => { if(activePlayers.includes(t.playerIndex)) t.el.classList.add('in-game'); });
-            playersInfo.forEach((p, idx) => { document.getElementById(`name-display-${idx}`).innerText = p.name; });
-
-            let colorName = playersInfo[myOnlineId] ? playersInfo[myOnlineId].color.toUpperCase() : '';
-            document.getElementById('brand-text').innerText = `ROOM: ${roomCode} | You are ${colorName}`;
-            updateTurnUI(); updateTokensPosition();
-            
-            if(gameMode === 'online' && isRolled && myOnlineId === currentTurn && !isAnimating && !isRolling && actionQueue.length === 0) {
-                let myTokens = tokens.filter(t => t.playerIndex === currentTurn);
-                let validTokens = myTokens.filter(t => { if (t.state === 'base' && diceValue === 6) return true; if (t.state === 'path' && (t.pos + diceValue <= 56)) return true; return false; });
-                validTokens.forEach(t => t.el.classList.add('highlight'));
+        async function toggleMic() {
+            let btn = document.getElementById('mic-btn');
+            if (!myAudioStream) {
+                try {
+                    myAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                    isMicEnabled = true; btn.classList.remove('mic-off'); btn.innerText = '🎤';
+                    
+                    // Broadcast new stream to all
+                    Object.values(peerConnections).forEach(c => c.close());
+                    peerConnections = {};
+                    db.ref(`rooms/${roomCode}/voice`).once('value', snapshot => {
+                        snapshot.forEach(child => { if (child.key != myOnlineId) connectToPeer(child.val()); });
+                    });
+                } catch(e) { alert("Microphone access denied! Please allow permissions."); }
+            } else {
+                isMicEnabled = !isMicEnabled;
+                myAudioStream.getAudioTracks().forEach(track => track.enabled = isMicEnabled);
+                if (isMicEnabled) { btn.classList.remove('mic-off'); btn.innerText = '🎤'; } else { btn.classList.add('mic-off'); btn.innerText = '🔇'; }
             }
         }
 
+        // --- ONLINE LOBBY CREATION ---
+        function createOnlineRoom() { roomCode = Math.floor(1000 + Math.random() * 9000).toString(); myOnlineId = 0; if(selectedPlayerCount === 2) activePlayers = [0, 2]; else if(selectedPlayerCount === 3) activePlayers = [0, 1, 2]; else activePlayers = [0, 1, 2, 3]; playersInfo[0].name = document.getElementById('input-0').value.trim() || "Host"; activePlayers.forEach(id => { if(id !== 0) playersInfo[id].name = "Waiting..."; }); startGame(true); saveGameState(); alert(`Your Room Code is: ${roomCode}\nShare this with up to ${selectedPlayerCount - 1} friends to let them join!`); initVoiceChat(); listenToRoom(); }
+        function joinOnlineRoom() { let code = prompt("Enter 4-digit Room Code to join:"); if(!code || code.length !== 4) return; roomCode = code; let myName = prompt("Enter Your Name:", "Player"); if(!myName) myName = "Friend"; db.ref('rooms/' + roomCode).once('value', snapshot => { let data = snapshot.val(); if(!data) { alert("Room not found!"); return; } gameMode = 'online'; activePlayers = data.state.activePlayers; selectedPlayerCount = activePlayers.length; let slotFound = -1; for(let id of activePlayers) { if(data.state.playersInfoNames[id] === "Waiting...") { slotFound = id; break; } } if(slotFound === -1) { alert("Room is already full!"); return; } myOnlineId = slotFound; playersInfo[myOnlineId].name = myName; db.ref(`rooms/${roomCode}/state/playersInfoNames/${myOnlineId}`).set(myName); startGame(true); initVoiceChat(); listenToRoom(); }); }
+        
+        // --- NEW: FIREBASE ACTION SYNC GUARD ---
+        let isInitialActionSync = true;
+        
+        function listenToRoom() { 
+            db.ref('rooms/' + roomCode + '/state').on('value', snapshot => { let data = snapshot.val(); if(data) { if(!isAnimating && !isRolling && actionQueue.length === 0) loadFromData(data); else pendingState = data; } }); 
+            db.ref('rooms/' + roomCode + '/action').on('value', snapshot => { 
+                let action = snapshot.val(); 
+                
+                // Fix for the "Ghost Action Bug" causing token freezes!
+                if(isInitialActionSync) {
+                    isInitialActionSync = false;
+                    if(action) lastActionId = action.id; // Record ID to prevent executing old move
+                    return; 
+                }
+                
+                if(action && action.id !== lastActionId) { lastActionId = action.id; actionQueue.push(action); processNextAction(); } 
+            }); 
+        }
+
+        function loadFromData(data) { gameMode = data.gameMode || 'online'; activePlayers = data.activePlayers; finishedPlayers = data.finishedPlayers || []; if(data.playersInfoNames) data.playersInfoNames.forEach((n, i) => playersInfo[i].name = n); currentTurnIndex = data.currentTurnIndex; currentTurn = data.currentTurn; diceValue = data.diceValue; isRolled = data.isRolled; consecutiveSixes = data.consecutiveSixes || 0; diceBags = data.diceBags || [[], [], [], []]; document.getElementById('setup-screen').style.display = 'none'; document.getElementById('game-wrapper').style.display = 'flex'; if(tokens.length === 0) initBoard(); data.tokenStates.forEach((ts, idx) => { tokens[idx].state = ts.state; tokens[idx].pos = ts.pos; }); if (isRolled && !finishedPlayers.includes(currentTurn)) document.getElementById(`dice-${currentTurn}`).innerText = diceFaces[diceValue - 1] || '🎲'; else document.getElementById(`dice-${currentTurn}`).innerText = '🎲'; activePlayers.forEach(id => { let pnl = document.getElementById(`panel-${id}`); pnl.classList.add('in-game'); if(finishedPlayers.includes(id)) pnl.classList.add('finished'); }); tokens.forEach(t => { if(activePlayers.includes(t.playerIndex)) t.el.classList.add('in-game'); }); playersInfo.forEach((p, idx) => { document.getElementById(`name-display-${idx}`).innerText = p.name; }); let colorName = playersInfo[myOnlineId] ? playersInfo[myOnlineId].color.toUpperCase() : ''; document.getElementById('brand-text').innerText = `ROOM: ${roomCode} | You are ${colorName}`; updateTurnUI(); updateTokensPosition(); if(gameMode === 'online' && isRolled && myOnlineId === currentTurn && !isAnimating && !isRolling && actionQueue.length === 0) { let myTokens = tokens.filter(t => t.playerIndex === currentTurn); let validTokens = myTokens.filter(t => { if (t.state === 'base' && diceValue === 6) return true; if (t.state === 'path' && (t.pos + diceValue <= 56)) return true; return false; }); validTokens.forEach(t => t.el.classList.add('highlight')); } }
+
         function startGame(isOnlineBypass = false) {
-            userHasInteracted = true; // User clicked a button, so audio is safe to play now
-            waitingForFirstInteraction = false;
+            userHasInteracted = true; waitingForFirstInteraction = false;
             if (!isOnlineBypass) {
                 playersInfo[0].name = document.getElementById('input-0').value.trim() || "Player 1";
                 for(let i=1; i<4; i++) playersInfo[i].name = document.getElementById(`input-${i}`).value.trim() || `Player ${i+1}`;
@@ -635,50 +427,18 @@
 
         const board = document.getElementById('board');
         function initBoard() {
-            board.innerHTML = "";
-            cacheBoardSize(); 
-            
-            for (let r = 1; r <= 15; r++) {
-                for (let c = 1; c <= 15; c++) {
-                    if ((r<=6 && c<=6) || (r<=6 && c>=10) || (r>=10 && c<=6) || (r>=10 && c>=10)) continue; 
-                    if (r>=7 && r<=9 && c>=7 && c<=9) continue;
-                    let cell = document.createElement('div'); cell.className = 'cell'; cell.style.gridRow = r; cell.style.gridColumn = c;
-                    if (r===8 && c>=2 && c<=6) cell.classList.add('bg-blue'); else if (r===8 && c>=10 && c<=14) cell.classList.add('bg-green'); else if (c===8 && r>=2 && r<=6) cell.classList.add('bg-red'); else if (c===8 && r>=10 && r<=14) cell.classList.add('bg-yellow');
-                    else if (r===7 && c===2) cell.classList.add('bg-blue', 'safe-star'); else if (r===2 && c===9) cell.classList.add('bg-red', 'safe-star'); else if (r===14 && c===7) cell.classList.add('bg-yellow', 'safe-star'); else if (r===9 && c===14) cell.classList.add('bg-green', 'safe-star'); else if ((r===3 && c===7) || (r===7 && c===13) || (r===13 && c===9) || (r===9 && c===3)) cell.classList.add('safe-star');
-                    board.appendChild(cell);
-                }
-            }
+            board.innerHTML = ""; cacheBoardSize(); 
+            for (let r = 1; r <= 15; r++) { for (let c = 1; c <= 15; c++) { if ((r<=6 && c<=6) || (r<=6 && c>=10) || (r>=10 && c<=6) || (r>=10 && c>=10)) continue; if (r>=7 && r<=9 && c>=7 && c<=9) continue; let cell = document.createElement('div'); cell.className = 'cell'; cell.style.gridRow = r; cell.style.gridColumn = c; if (r===8 && c>=2 && c<=6) cell.classList.add('bg-blue'); else if (r===8 && c>=10 && c<=14) cell.classList.add('bg-green'); else if (c===8 && r>=2 && r<=6) cell.classList.add('bg-red'); else if (c===8 && r>=10 && r<=14) cell.classList.add('bg-yellow'); else if (r===7 && c===2) cell.classList.add('bg-blue', 'safe-star'); else if (r===2 && c===9) cell.classList.add('bg-red', 'safe-star'); else if (r===14 && c===7) cell.classList.add('bg-yellow', 'safe-star'); else if (r===9 && c===14) cell.classList.add('bg-green', 'safe-star'); else if ((r===3 && c===7) || (r===7 && c===13) || (r===13 && c===9) || (r===9 && c===3)) cell.classList.add('safe-star'); board.appendChild(cell); } }
             let centerHome = document.createElement('div'); centerHome.className = 'home-center'; centerHome.innerHTML = '<div class="home-icon">🏡</div>'; board.appendChild(centerHome);
-
-            function buildYard(rStart, rEnd, cStart, cEnd, colorClass, spots) {
-                let yard = document.createElement('div'); yard.style.gridRow = `${rStart} / ${rEnd + 1}`; yard.style.gridColumn = `${cStart} / ${cEnd + 1}`; yard.classList.add(colorClass); yard.style.border = "1px solid #333"; board.appendChild(yard);
-                let inner = document.createElement('div'); inner.style.gridRow = `${rStart+1} / ${rEnd}`; inner.style.gridColumn = `${cStart+1} / ${cEnd}`; inner.style.backgroundColor = "#fff"; inner.style.borderRadius = "15px"; inner.style.boxShadow = "inset 0 0 10px rgba(0,0,0,0.3)"; inner.style.position = "relative"; board.appendChild(inner);
-                const spotCoords = [[25,25], [25,75], [75,25], [75,75]];
-                spotCoords.forEach(pos => { let spot = document.createElement('div'); spot.style.position = 'absolute'; spot.style.top = `${pos[0]}%`; spot.style.left = `${pos[1]}%`; spot.style.transform = 'translate(-50%, -50%)'; spot.style.width = '38%'; spot.style.height = '38%'; spot.classList.add(colorClass); spot.style.borderRadius = "50%"; spot.style.boxShadow = "inset 0 3px 6px rgba(0,0,0,0.4)"; inner.appendChild(spot); });
-            }
-
-            buildYard(1, 6, 1, 6, 'bg-blue', baseMap.blue); buildYard(1, 6, 10, 15, 'bg-red', baseMap.red); buildYard(10, 15, 1, 6, 'bg-yellow', baseMap.yellow); buildYard(10, 15, 10, 15, 'bg-green', baseMap.green);
-
-            tokens = [];
-            playersInfo.forEach(player => {
-                for(let i=0; i<4; i++) {
-                    let t = document.createElement('div'); t.className = `token ${player.color}`; t.id = `${player.color}-${i}`; board.appendChild(t);
-                    let tokenData = { el: t, color: player.color, id: i, state: 'base', pos: -1, playerIndex: player.id };
-                    tokens.push(tokenData); t.addEventListener('click', () => tokenClicked(tokenData));
-                }
-            });
+            function buildYard(rStart, rEnd, cStart, cEnd, colorClass) { let yard = document.createElement('div'); yard.style.gridRow = `${rStart} / ${rEnd + 1}`; yard.style.gridColumn = `${cStart} / ${cEnd + 1}`; yard.classList.add(colorClass); yard.style.border = "1px solid #333"; board.appendChild(yard); let inner = document.createElement('div'); inner.style.gridRow = `${rStart+1} / ${rEnd}`; inner.style.gridColumn = `${cStart+1} / ${cEnd}`; inner.style.backgroundColor = "#fff"; inner.style.borderRadius = "15px"; inner.style.boxShadow = "inset 0 0 10px rgba(0,0,0,0.3)"; inner.style.position = "relative"; board.appendChild(inner); const spotCoords = [[25,25], [25,75], [75,25], [75,75]]; spotCoords.forEach(pos => { let spot = document.createElement('div'); spot.style.position = 'absolute'; spot.style.top = `${pos[0]}%`; spot.style.left = `${pos[1]}%`; spot.style.transform = 'translate(-50%, -50%)'; spot.style.width = '38%'; spot.style.height = '38%'; spot.classList.add(colorClass); spot.style.borderRadius = "50%"; spot.style.boxShadow = "inset 0 3px 6px rgba(0,0,0,0.4)"; inner.appendChild(spot); }); }
+            buildYard(1, 6, 1, 6, 'bg-blue'); buildYard(1, 6, 10, 15, 'bg-red'); buildYard(10, 15, 1, 6, 'bg-yellow'); buildYard(10, 15, 10, 15, 'bg-green');
+            tokens = []; playersInfo.forEach(player => { for(let i=0; i<4; i++) { let t = document.createElement('div'); t.className = `token ${player.color}`; t.id = `${player.color}-${i}`; board.appendChild(t); let tokenData = { el: t, color: player.color, id: i, state: 'base', pos: -1, playerIndex: player.id }; tokens.push(tokenData); t.addEventListener('click', () => tokenClicked(tokenData)); } });
         }
 
         function updateTokensPosition() {
-            if(boardMetrics.w === 0) cacheBoardSize();
-            const cellW = boardMetrics.w / 15; 
-            const cellH = boardMetrics.h / 15;
-            
+            if(boardMetrics.w === 0) cacheBoardSize(); const cellW = boardMetrics.w / 15; const cellH = boardMetrics.h / 15;
             let gridPositions = {};
-            tokens.forEach(t => {
-                if(t.state === 'path') { let r, c; if (t.pos <= 50) { let globalIndex = (playersInfo[t.playerIndex].startIndex + t.pos) % 52; r = pathMap[globalIndex][0]; c = pathMap[globalIndex][1]; } else { r = homeStretchMap[t.color][t.pos - 51][0]; c = homeStretchMap[t.color][t.pos - 51][1]; } let key = `${r}-${c}`; if(!gridPositions[key]) gridPositions[key] = []; gridPositions[key].push(t); }
-            });
-
+            tokens.forEach(t => { if(t.state === 'path') { let r, c; if (t.pos <= 50) { let globalIndex = (playersInfo[t.playerIndex].startIndex + t.pos) % 52; r = pathMap[globalIndex][0]; c = pathMap[globalIndex][1]; } else { r = homeStretchMap[t.color][t.pos - 51][0]; c = homeStretchMap[t.color][t.pos - 51][1]; } let key = `${r}-${c}`; if(!gridPositions[key]) gridPositions[key] = []; gridPositions[key].push(t); } });
             tokens.forEach(t => {
                 let r, c, shiftX = 0, shiftY = 0, scale = 1;
                 if (t.state === 'base') { r = baseMap[t.color][t.id][0]; c = baseMap[t.color][t.id][1]; scale = 1.45; } 
@@ -689,8 +449,7 @@
                     if(group && group.length > 1) { scale = 0.55; let idx = group.indexOf(t); const offX = cellW * 0.18; const offY = cellH * 0.18; const offsets = [[-offX, -offY], [offX, offY], [-offX, offY], [offX, -offY], [0, -offY*1.5], [-offX*1.5, 0], [offX*1.5, 0], [0, offY*1.5]]; if(idx < offsets.length) { shiftX = offsets[idx][0]; shiftY = offsets[idx][1]; } } else { scale = 0.75; }
                 }
                 t.el.style.width = `${cellW * 1.2}px`; t.el.style.height = `${cellH * 1.2}px`; 
-                let exactX = (c - 1) * cellW + (cellW / 2) + shiftX;
-                let exactY = (r - 1) * cellH + (cellH / 2) + shiftY;
+                let exactX = (c - 1) * cellW + (cellW / 2) + shiftX; let exactY = (r - 1) * cellH + (cellH / 2) + shiftY;
                 t.el.style.transform = `translate3d(${exactX}px, ${exactY}px, 0) translate(-50%, -50%) scale(${scale})`;
             });
         }
@@ -700,8 +459,6 @@
             let activePanel = document.getElementById(`panel-${currentTurn}`); activePanel.classList.add('active');
             if(gameMode === 'bot' && playersInfo[currentTurn].isBot) { 
                 activePanel.classList.add('bot-turn'); 
-                // FIX: Don't trigger bot if waiting for first user interaction (post-refresh guard)
-                // FIX: Clear any stale bot timeout to prevent double-roll race condition
                 if(!isRolled && !isAnimating && !waitingForFirstInteraction) { 
                     clearTimeout(botTurnTimeout);
                     botTurnTimeout = setTimeout(() => diceClicked(currentTurn, true), 800); 
@@ -712,68 +469,35 @@
         const diceFaces = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
         
         function diceClicked(playerIndex, isAutoCall = false) {
-            if (!isAutoCall) {
-                if (playerIndex !== currentTurn) return; 
-                if (gameMode === 'bot' && playersInfo[currentTurn].isBot) return; 
-                if (gameMode === 'online' && myOnlineId !== currentTurn) return; 
-            }
-            
-            // LOCK FIXED: Even Bot Auto-calls must respect action pending state to prevent race conditions
+            if (!isAutoCall) { if (playerIndex !== currentTurn) return; if (gameMode === 'bot' && playersInfo[currentTurn].isBot) return; if (gameMode === 'online' && myOnlineId !== currentTurn) return; }
             if (isRolled || isAnimating || isRolling || isActionPending || finishedPlayers.includes(currentTurn)) return; 
             
             isActionPending = true; 
-
             try {
                 if (!diceBags[playerIndex] || diceBags[playerIndex].length <= 2) {
                     diceBags[playerIndex] = [1, 2, 3, 4, 5, 6];
-                    for (let i = diceBags[playerIndex].length - 1; i > 0; i--) {
-                        const j = Math.floor(Math.random() * (i + 1));
-                        [diceBags[playerIndex][i], diceBags[playerIndex][j]] = [diceBags[playerIndex][j], diceBags[playerIndex][i]];
-                    }
+                    for (let i = diceBags[playerIndex].length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [diceBags[playerIndex][i], diceBags[playerIndex][j]] = [diceBags[playerIndex][j], diceBags[playerIndex][i]]; }
                 }
                 let result = diceBags[playerIndex].pop();
-
                 if (gameMode === 'online') { 
-                    db.ref(`rooms/${roomCode}/action`).set({ type: 'ROLL', by: playerIndex, result: result, id: Date.now() }); 
+                    db.ref(`rooms/${roomCode}/action`).set({ type: 'ROLL', by: playerIndex, result: result, id: Date.now() }).catch(e => { isActionPending = false; }); 
                 } else { 
-                    actionQueue.push({ type: 'ROLL', by: playerIndex, result: result });
-                    processNextAction();
+                    actionQueue.push({ type: 'ROLL', by: playerIndex, result: result }); processNextAction(); 
                 }
-            } catch(e) {
-                isActionPending = false;
-            }
+            } catch(e) { isActionPending = false; }
         }
 
         function executeRoll(playerIndex, result) {
-            let activeDiceEl = document.getElementById(`dice-${currentTurn}`); 
-            activeDiceEl.innerText = '⌛'; 
-            playSfx(diceSound); triggerHaptic(50); 
-            
+            let activeDiceEl = document.getElementById(`dice-${currentTurn}`); activeDiceEl.innerText = '⌛'; playSfx(diceSound); triggerHaptic(50); 
             const handleRollComplete = () => {
-                diceValue = result; 
-                activeDiceEl.innerText = diceFaces[diceValue - 1]; 
-                isRolled = true; 
-                
+                diceValue = result; activeDiceEl.innerText = diceFaces[diceValue - 1]; isRolled = true; 
                 if(diceValue === 6) triggerHaptic([50, 50, 50]); 
                 if (diceValue === 6) { 
-                    consecutiveSixes++; 
-                    if (consecutiveSixes === 3) { 
-                        triggerHaptic([200, 100, 200]); consecutiveSixes = 0; isRolled = false; 
-                        if (gameMode === 'online') { if (myOnlineId === 0) setTimeout(nextTurn, 500); } else { setTimeout(nextTurn, 500); }
-                        setRolling(false);
-                        return; 
-                    } 
+                    consecutiveSixes++; if (consecutiveSixes === 3) { triggerHaptic([200, 100, 200]); consecutiveSixes = 0; isRolled = false; if (gameMode === 'online') { if (myOnlineId === 0) setTimeout(nextTurn, 500); } else { setTimeout(nextTurn, 500); } setRolling(false); return; } 
                 } else { consecutiveSixes = 0; }
-                
-                checkPossibleMoves(); 
-                setRolling(false);
+                checkPossibleMoves(); setRolling(false);
             };
-
-            if (is3DDiceEnabled) {
-                launch3DDice(result, playerIndex, handleRollComplete);
-            } else {
-                setTimeout(handleRollComplete, 350); 
-            }
+            if (is3DDiceEnabled) { launch3DDice(result, playerIndex, handleRollComplete); } else { setTimeout(handleRollComplete, 350); }
         }
 
         function checkPossibleMoves() {
@@ -790,14 +514,14 @@
                         let score = 0; let nextPos = t.pos + diceValue;
                         if (t.state === 'base' && diceValue === 6) score += 60; else if (nextPos === 56) score += 80; else if (nextPos < 51) {
                             let globalIndex = (playersInfo[currentTurn].startIndex + nextPos) % 52; let isSafeStar = (globalIndex === 0 || globalIndex === 13 || globalIndex === 26 || globalIndex === 39 || globalIndex === 8 || globalIndex === 21 || globalIndex === 34 || globalIndex === 47);
-                            if (isSafeStar) score += 40; 
-                            let canKill = false; if (!isSafeStar) { tokens.forEach(enemy => { if (enemy.playerIndex !== currentTurn && enemy.state === 'path' && enemy.pos < 51 && activePlayers.includes(enemy.playerIndex)) { let enemyGlobalIndex = (playersInfo[enemy.playerIndex].startIndex + enemy.pos) % 52; if (enemyGlobalIndex === globalIndex) canKill = true; } }); }
+                            if (isSafeStar) score += 40; let canKill = false; if (!isSafeStar) { tokens.forEach(enemy => { if (enemy.playerIndex !== currentTurn && enemy.state === 'path' && enemy.pos < 51 && activePlayers.includes(enemy.playerIndex)) { let enemyGlobalIndex = (playersInfo[enemy.playerIndex].startIndex + enemy.pos) % 52; if (enemyGlobalIndex === globalIndex) canKill = true; } }); }
                             if (canKill) score += 100; score += t.pos; 
                         } else { score += t.pos; }
                         if (score > maxScore) { maxScore = score; bestToken = t; }
                     }
                     setTimeout(() => tokenClicked(bestToken, true), 700);
                 } else {
+                    // NEW: Prevents BOTH host and client sending Auto-Move simultaneous to Firebase
                     if(gameMode !== 'online' || myOnlineId === currentTurn) {
                         if (validTokens.length === 1) { setTimeout(() => tokenClicked(validTokens[0], true), 350); } else { validTokens.forEach(t => t.el.classList.add('highlight')); }
                     }
@@ -806,30 +530,18 @@
         }
 
         function tokenClicked(t, isAutoCall = false) { 
-            if (!isAutoCall) {
-                if (t.playerIndex !== currentTurn) return; 
-                if (gameMode === 'bot' && playersInfo[currentTurn].isBot) return; 
-                if (gameMode === 'online' && myOnlineId !== currentTurn) return; 
-            }
-
-            // LOCK FIXED: Prevents double clicks overriding the Auto-Move timeout and crashing the tokens position
+            if (!isAutoCall) { if (t.playerIndex !== currentTurn) return; if (gameMode === 'bot' && playersInfo[currentTurn].isBot) return; if (gameMode === 'online' && myOnlineId !== currentTurn) return; }
             if (!isRolled || isAnimating || isRolling || isActionPending) return; 
-            
             if (t.state === 'base' && diceValue !== 6) return; 
             if (t.state === 'path' && (t.pos + diceValue > 56)) return; 
-            
             isActionPending = true; 
-
-            try {
+            try { 
                 if (gameMode === 'online') { 
-                    db.ref(`rooms/${roomCode}/action`).set({ type: 'MOVE', color: t.color, tokenId: t.id, id: Date.now() }); 
+                    db.ref(`rooms/${roomCode}/action`).set({ type: 'MOVE', color: t.color, tokenId: t.id, id: Date.now() }).catch(e => { isActionPending = false; }); 
                 } else { 
-                    actionQueue.push({ type: 'MOVE', color: t.color, tokenId: t.id });
-                    processNextAction();
-                }
-            } catch(e) {
-                isActionPending = false;
-            }
+                    actionQueue.push({ type: 'MOVE', color: t.color, tokenId: t.id }); processNextAction(); 
+                } 
+            } catch(e) { isActionPending = false; }
         }
 
         function executeMove(t) {
@@ -843,23 +555,15 @@
                     if (stepsLeft > 0) { setTimeout(takeStep, 250); } else {
                         let killed = false; let isSafeStar = false;
                         if (t.pos === 56) { t.state = 'home'; playSfx(homeSound); triggerHaptic([100, 50, 100, 50, 100]); killed = true; updateTokensPosition(); } else if (t.pos < 51) {
-                            let globalIndex = (playersInfo[currentTurn].startIndex + t.pos) % 52;
-                            isSafeStar = (globalIndex === 0 || globalIndex === 13 || globalIndex === 26 || globalIndex === 39 || globalIndex === 8 || globalIndex === 21 || globalIndex === 34 || globalIndex === 47);
-                            tokens.forEach(enemy => {
-                                if (enemy.playerIndex !== currentTurn && enemy.state === 'path' && enemy.pos < 51 && activePlayers.includes(enemy.playerIndex)) {
-                                    let enemyGlobalIndex = (playersInfo[enemy.playerIndex].startIndex + enemy.pos) % 52;
-                                    if (!isSafeStar && enemyGlobalIndex === globalIndex) { enemy.state = 'base'; enemy.pos = -1; killed = true; playSfx(killSound); triggerHaptic([200, 50, 200]); updateTokensPosition(); }
-                                }
-                            });
+                            let globalIndex = (playersInfo[currentTurn].startIndex + t.pos) % 52; isSafeStar = (globalIndex === 0 || globalIndex === 13 || globalIndex === 26 || globalIndex === 39 || globalIndex === 8 || globalIndex === 21 || globalIndex === 34 || globalIndex === 47);
+                            tokens.forEach(enemy => { if (enemy.playerIndex !== currentTurn && enemy.state === 'path' && enemy.pos < 51 && activePlayers.includes(enemy.playerIndex)) { let enemyGlobalIndex = (playersInfo[enemy.playerIndex].startIndex + enemy.pos) % 52; if (!isSafeStar && enemyGlobalIndex === globalIndex) { enemy.state = 'base'; enemy.pos = -1; killed = true; playSfx(killSound); triggerHaptic([200, 50, 200]); updateTokensPosition(); } } });
                         }
                         if(killed) { diceValue = 6; consecutiveSixes = 0; } else if (isSafeStar && t.pos !== -1) { playSfx(safeSound); }
                         setTimeout(finalizeMove, 50); 
                     }
                 }
                 takeStep(); 
-            } else {
-                setAnimating(false); 
-            }
+            } else { setAnimating(false); }
         }
 
         function checkWinCondition() {
@@ -882,19 +586,10 @@
             updateTokensPosition();  
             if (checkWinCondition()) { setAnimating(false); return; }
             if (diceValue === 6) { 
-                isRolled = false; 
-                if (gameMode === 'online') { if (myOnlineId === 0) saveGameState(); } else { saveGameState(); }
-                // FIX v6.3: setAnimating(false) called BEFORE bot setTimeout so all locks are clear
+                isRolled = false; if (gameMode === 'online') { if (myOnlineId === 0) saveGameState(); } else { saveGameState(); }
                 setAnimating(false);
-                if(gameMode === 'bot' && playersInfo[currentTurn].isBot) { 
-                    clearTimeout(botTurnTimeout);
-                    botTurnTimeout = setTimeout(() => diceClicked(currentTurn, true), 1200); 
-                } 
+                if(gameMode === 'bot' && playersInfo[currentTurn].isBot) { clearTimeout(botTurnTimeout); botTurnTimeout = setTimeout(() => diceClicked(currentTurn, true), 1200); } 
             } else { 
-                // FIX v6.3: setAnimating(false) MUST be called BEFORE nextTurn() so that when
-                // nextTurn() → updateTurnUI() runs, isAnimating===false and bot timeout IS scheduled.
-                // Previously: isAnimating was still true inside updateTurnUI → bot timeout never fired.
-                // Same fix helps online mode: Firebase pendingState loads immediately after setAnimating(false).
                 setAnimating(false);
                 if (gameMode === 'online') { if (myOnlineId === 0) nextTurn(); } else { nextTurn(); } 
             } 
@@ -926,12 +621,8 @@
                 tokens.forEach(t => { if(activePlayers.includes(t.playerIndex)) t.el.classList.add('in-game'); });
                 playersInfo.forEach((p, idx) => { document.getElementById(`name-display-${idx}`).innerText = p.name; });
                 
-                // FIX: Always require user tap after refresh before any auto-action.
-                // This fixes BOTH: Bot auto-play on refresh AND Sound block on refresh.
                 waitingForFirstInteraction = true;
-                let turnName = playersInfo[currentTurn].name;
-                let turnColor = playersInfo[currentTurn].hex;
-                let isBotTurn = gameMode === 'bot' && playersInfo[currentTurn].isBot;
+                let turnName = playersInfo[currentTurn].name; let turnColor = playersInfo[currentTurn].hex; let isBotTurn = gameMode === 'bot' && playersInfo[currentTurn].isBot;
                 let infoText = `<span style="color:${turnColor}; font-weight:bold;">${turnName}</span>'s turn${isBotTurn ? ' <span style="color:#aaa;">(Computer)</span>' : ''}`;
                 document.getElementById('resume-turn-info').innerHTML = `Turn: ${infoText}`;
                 document.getElementById('resume-overlay').style.display = 'flex';
@@ -942,49 +633,33 @@
 
         function clearGameState() { if(confirm("Exit and start a new game?")) { localStorage.removeItem('ludo_master_state'); if (gameMode === 'online' && roomCode && myOnlineId === 0) db.ref('rooms/' + roomCode).remove(); location.reload(); } }
 
-        // FIX: Called when user taps "Tap to Continue" overlay after refresh.
-        // This is the user's FIRST interaction, which unlocks browser audio policy.
         function continueFromLoad() {
-            userHasInteracted = true;   // Unlock audio - browser policy satisfied
-            waitingForFirstInteraction = false; // Allow bot auto-play now
+            userHasInteracted = true; 
+            waitingForFirstInteraction = false; 
             document.getElementById('resume-overlay').style.display = 'none';
             
-            // Warm up all audio objects (unlock iOS/Android autoplay policy)
             const allSounds = [killSound, spawnSound, homeSound, diceSound, moveSound, gameOverSound, safeSound];
             allSounds.forEach(s => { s.volume = 0; s.play().catch(()=>{}); s.pause(); s.volume = 1; s.currentTime = 0; });
             
-            // Now if it's bot's turn, trigger it safely
-            if (gameMode === 'bot' && playersInfo[currentTurn].isBot && !isRolled && !isAnimating && !isRolling) {
-                clearTimeout(botTurnTimeout);
-                botTurnTimeout = setTimeout(() => diceClicked(currentTurn, true), 600);
+            if (isRolled) {
+                if (gameMode === 'bot' && playersInfo[currentTurn].isBot) { setTimeout(checkPossibleMoves, 600); } else { checkPossibleMoves(); }
+            } else {
+                if (gameMode === 'bot' && playersInfo[currentTurn].isBot) { clearTimeout(botTurnTimeout); botTurnTimeout = setTimeout(() => diceClicked(currentTurn, true), 800); }
             }
         }
         
         window.onload = () => { 
             loadGameState(); 
-
             window.lastGlobalClick = 0;
             const blockSpam = function(e) {
-                // FIX: Mark user as having interacted (unlocks audio for future sounds)
                 if (!userHasInteracted) { userHasInteracted = true; }
-                
                 let now = Date.now();
-                if (now - window.lastGlobalClick < 150) { 
-                    e.stopPropagation(); if(e.cancelable) e.preventDefault(); return; 
-                }
-                if (isRolling || isAnimating || isActionPending) {
-                    e.stopPropagation(); if(e.cancelable) e.preventDefault(); return;
-                }
-                if (gameMode === 'bot' && playersInfo[currentTurn].isBot) {
-                    e.stopPropagation(); if(e.cancelable) e.preventDefault(); return;
-                }
-                if (gameMode === 'online' && myOnlineId !== currentTurn) {
-                    e.stopPropagation(); if(e.cancelable) e.preventDefault(); return;
-                }
-
+                if (now - window.lastGlobalClick < 150) { e.stopPropagation(); if(e.cancelable) e.preventDefault(); return; }
+                if (isRolling || isAnimating || isActionPending) { e.stopPropagation(); if(e.cancelable) e.preventDefault(); return; }
+                if (gameMode === 'bot' && playersInfo[currentTurn].isBot) { e.stopPropagation(); if(e.cancelable) e.preventDefault(); return; }
+                if (gameMode === 'online' && myOnlineId !== currentTurn) { e.stopPropagation(); if(e.cancelable) e.preventDefault(); return; }
                 window.lastGlobalClick = now;
             };
-            
             let bc = document.getElementById('board-container');
             bc.addEventListener('click', blockSpam, true);
             bc.addEventListener('touchstart', blockSpam, {capture: true, passive: false});
